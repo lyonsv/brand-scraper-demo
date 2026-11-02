@@ -9,7 +9,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "shot": "tsx scripts/screenshot.ts"
   },
   "dependencies": {
     "culori": "^4.0.2",

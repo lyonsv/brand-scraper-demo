@@ -334,6 +334,8 @@ export interface LogoAsset {
   height: number;
   score: number;
   reasons: string[];
+  /** single-tone SVG logos can be reversed on the opposite background */
+  tone?: "dark" | "light" | "color";
 }
 
 export interface IconAsset {

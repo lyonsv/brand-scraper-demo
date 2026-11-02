@@ -173,6 +173,19 @@ export function analyzeUi(raw: RawExtraction, roles: ColorRole[]): UiElements {
   };
 }
 
+/** Classify an SVG's paint colours: all dark neutrals, all light neutrals, or coloured. */
+export function svgTone(svg: string): "dark" | "light" | "color" {
+  const paints = [...svg.matchAll(/(?:fill|stroke|stop-color)\s*[=:]\s*"?([^";)]+\)?)/gi)].map((m) => m[1].trim());
+  const parsed = paints
+    .filter((v) => !/^(none|transparent|url|inherit)/i.test(v))
+    .map((v) => parseColor(v))
+    .filter((c): c is NonNullable<ReturnType<typeof parseColor>> => !!c);
+  if (!parsed.length) return "dark"; // SVG default fill is black
+  if (parsed.every((c) => c.oklch.l < 0.5 && c.oklch.c < 0.12)) return "dark";
+  if (parsed.every((c) => c.oklch.l > 0.85 && c.oklch.c < 0.05)) return "light";
+  return "color";
+}
+
 export function svgToDataUrl(svg: string): string {
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
@@ -187,6 +200,7 @@ export function buildLogoSet(raw: RawExtraction, pngFallback: string | null, man
     height: l.height,
     score: l.score,
     reasons: l.reasons,
+    tone: l.kind === "svg" && l.svg ? svgTone(l.svg) : undefined,
   }));
   const valid = assets.filter((a) => a.src);
   if (pngFallback && valid[0]) {

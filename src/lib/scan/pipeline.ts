@@ -173,10 +173,34 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
         blockedRequests++;
         return route.abort("blockedbyclient").catch(() => undefined);
       }
+      const isMainNav = req.isNavigationRequest() && req.frame() === page.mainFrame();
       if (!(await guard(reqUrl))) {
         blockedRequests++;
-        if (req.isNavigationRequest() && req.frame() === page.mainFrame()) blockedPrivate = reqUrl;
+        if (isMainNav) blockedPrivate = reqUrl;
         return route.abort("blockedbyclient").catch(() => undefined);
+      }
+      if (isMainNav) {
+        // Chromium follows redirects without re-entering this handler, so walk the redirect
+        // chain ourselves (no auto-follow) and check every hop before letting the browser go.
+        try {
+          const first = await route.fetch({ maxRedirects: 0, timeout: 20_000 });
+          let res = first;
+          let hopUrl = reqUrl;
+          for (let hop = 0; hop < 8 && res.status() >= 300 && res.status() < 400; hop++) {
+            const location = res.headers()["location"];
+            if (!location) break;
+            hopUrl = new URL(location, hopUrl).href;
+            if (!(await guard(hopUrl))) {
+              blockedRequests++;
+              blockedPrivate = hopUrl;
+              return route.abort("blockedbyclient").catch(() => undefined);
+            }
+            res = await context!.request.fetch(hopUrl, { maxRedirects: 0, timeout: 20_000, headers: { "user-agent": USER_AGENT } });
+          }
+          return route.fulfill({ response: first }).catch(() => undefined);
+        } catch {
+          return route.continue().catch(() => undefined);
+        }
       }
       return route.continue().catch(() => undefined);
     });

@@ -13,12 +13,21 @@ function downloadName(asset: LogoAsset, base: string): string {
 }
 
 function LogoTile({ asset, dark }: { asset: LogoAsset; dark: boolean }) {
+  // reverse single-tone logos that would vanish on this tile
+  const reverse = (dark && asset.tone === "dark") || (!dark && asset.tone === "light");
   return (
     <div
-      className={`flex h-40 items-center justify-center rounded-2xl p-8 ${dark ? "bg-[#111113]" : "border border-line bg-white"}`}
+      className={`relative flex h-40 items-center justify-center rounded-2xl p-8 ${dark ? "bg-[#111113]" : "border border-line bg-white"}`}
       style={dark ? undefined : { backgroundImage: "radial-gradient(#e9e9e5 1px, transparent 1px)", backgroundSize: "14px 14px" }}
     >
-      <img src={asset.src} alt={asset.alt || "Logo"} referrerPolicy="no-referrer" className="max-h-16 max-w-[80%] object-contain" />
+      <img
+        src={asset.src}
+        alt={asset.alt || "Logo"}
+        referrerPolicy="no-referrer"
+        className="max-h-16 max-w-[80%] object-contain"
+        style={reverse ? { filter: dark ? "brightness(0) invert(1)" : "brightness(0)" } : undefined}
+      />
+      {reverse ? <span className={`absolute bottom-2 right-3 text-[10px] uppercase tracking-wider ${dark ? "text-white/50" : "text-muted"}`}>reversed</span> : null}
     </div>
   );
 }

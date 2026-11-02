@@ -131,7 +131,7 @@ export function ImagerySection({ images }: { images: ImageAsset[] }) {
     <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
       {images.map((img) => (
         <a key={img.src} href={img.src} target="_blank" rel="noreferrer" className="group overflow-hidden rounded-xl border border-line bg-[#f3f3f0]">
-          <img src={img.src} alt={img.alt} loading="lazy" referrerPolicy="no-referrer" className="aspect-[4/3] w-full object-cover transition group-hover:scale-[1.02]" />
+          <img src={img.src} alt={img.alt} referrerPolicy="no-referrer" className="aspect-[4/3] w-full object-cover transition group-hover:scale-[1.02]" />
         </a>
       ))}
     </div>

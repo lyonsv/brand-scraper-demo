@@ -394,6 +394,8 @@
     }
     if (lr.width <= 24 && lr.height <= 24) sc -= 3; // UI icons
     if (closestTag(le, "button")) sc -= 2;
+    var labelBlob = (le.getAttribute("alt") || "") + " " + (link ? link.innerText || "" : "");
+    if (/(sign in|log ?in|sign up|menu|search|close|cart|account)/i.test(labelBlob) && !/logo|brand/i.test(attrBlob(le))) continue;
     if (sc < 3) continue;
     var cand = {
       kind: le.tagName.toLowerCase() === "svg" ? "svg" : "img",

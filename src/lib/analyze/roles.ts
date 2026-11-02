@@ -98,7 +98,12 @@ export function assignRoles(input: RoleInput): RoleResult {
 
   // secondary / accent: next chromatic clusters at least 30° of hue away
   const chromatic = input.clusters.filter(
-    (c) => c.chromatic && c.share >= 0.002 && (!primary || deltaE(c.hex, primary.hex) >= 10),
+    (c) =>
+      c.chromatic &&
+      c.share >= 0.004 &&
+      // very dark or very pale clusters only count when they are used a lot
+      ((c.oklch.l >= 0.25 && c.oklch.l <= 0.93) || c.share >= 0.03) &&
+      (!primary || deltaE(c.hex, primary.hex) >= 10),
   );
   const isFarFrom = (c: ColorCluster, others: ColorRole[]) =>
     others.every((o) => isNeutral(o.oklch) || hueDistance(c.oklch.h, o.oklch.h) >= 30);

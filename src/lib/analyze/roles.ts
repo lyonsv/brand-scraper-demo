@@ -1,5 +1,5 @@
 import type { ColorCluster, ColorRole, ColorRoleName, ContrastPair, Oklch } from "../types";
-import { CLUSTER_DELTA_E as CLUSTER_DE, adjustLightness, deltaE, findCluster, hueDistance, isNeutral, parseColor } from "./color";
+import { CLUSTER_DELTA_E as CLUSTER_DE, adjustLightness, deltaE, deriveMuted, findCluster, hueDistance, isNeutral, parseColor } from "./color";
 import { contrast, contrastRatio, pickTextColor } from "./contrast";
 
 export interface WeightedHex {
@@ -215,12 +215,12 @@ export function assignRoles(input: RoleInput): RoleResult {
     if (!p || p.oklch.c >= 0.06) return false;
     if (roles.some((x) => (x.role === "primary" || x.role === "secondary" || x.role === "accent") && deltaE(x.hex, t.hex) < 6)) return false;
     const r = contrastRatio(t.hex, bgHex);
-    return r >= 2.5 && r < textRatio && deltaE(t.hex, textHex) >= 5;
+    return r >= 3 && r < textRatio && deltaE(t.hex, textHex) >= 5;
   });
   roles.push(
     muted
       ? fromHex("muted", muted.hex, "Secondary text colour (lower contrast)")!
-      : fromHex("muted", adjustLightness(textHex, bgIsLight ? 0.3 : -0.3), "Derived from the text colour", true)!,
+      : fromHex("muted", deriveMuted(textHex, bgHex), "Derived from the text colour (kept at ≥ 4.5:1)", true)!,
   );
 
   // border

@@ -420,7 +420,12 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
       await page.evaluate("Array.prototype.map.call(document.querySelectorAll('style'), function (s) { return s.textContent || ''; }).join('\\n').slice(0, 3000000)"),
     );
     const sheets = (await Promise.all(cssTexts)).filter((s): s is { url: string; text: string } => !!s);
-    const parsedFaces: ParsedFontFace[] = [...parseFontFaces(inlineCss, finalUrl), ...sheets.flatMap((s) => parseFontFaces(s.text, s.url))];
+    const parsedFaces: ParsedFontFace[] = [
+      ...parseFontFaces(inlineCss, finalUrl),
+      ...sheets.flatMap((s) => parseFontFaces(s.text, s.url)),
+      // CSSOM fallback: covers sheets whose network body we didn't capture (parallel-run races)
+      ...(raw.fontFaceRules ?? []).flatMap((r) => parseFontFaces(r.css, r.base)),
+    ];
     const extraVars = [inlineCss, ...sheets.map((s) => s.text)].reduce<Record<string, string>>((acc, css) => Object.assign(acc, parseRootVars(css)), {});
     for (const [k, v] of Object.entries(extraVars)) if (!(k in raw.cssVars)) raw.cssVars[k] = v;
 

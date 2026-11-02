@@ -223,3 +223,29 @@ export function readableOn(color: string, bg: string, minRatio = 3, fallbacks: s
   }
   return contrastRatio("#FFFFFF", b.hex) >= contrastRatio("#000000", b.hex) ? "#FFFFFF" : "#000000";
 }
+
+/** sRGB mix of two #RRGGBB colours: `amount` of `a` over `b`. */
+export function mixHex(a: string, b: string, amount: number): string {
+  const pa = parseInt(a.slice(1, 7), 16);
+  const pb = parseInt(b.slice(1, 7), 16);
+  const ch = (n: number, shift: number) => (n >> shift) & 255;
+  const mix = (shift: number) => Math.round(ch(pa, shift) * amount + ch(pb, shift) * (1 - amount));
+  return `#${[16, 8, 0].map((sh) => mix(sh).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+}
+
+/**
+ * A muted text colour derived from `text`: blend it toward the background only while it keeps
+ * ≥ minRatio (AA, 4.5:1). When the text colour itself is already soft (< 7:1), use it unchanged.
+ */
+export function deriveMuted(text: string, bg: string, minRatio = 4.5): string {
+  const t = parseColor(text)?.hex ?? text;
+  const b = parseColor(bg)?.hex ?? bg;
+  if (contrastRatio(t, b) < 7) return t;
+  let best = t;
+  for (let amount = 0.95; amount >= 0.3; amount -= 0.05) {
+    const candidate = mixHex(t, b, amount);
+    if (contrastRatio(candidate, b) < minRatio) break;
+    best = candidate;
+  }
+  return best;
+}

@@ -340,9 +340,16 @@
   var cssVars = {};
   var varCount = 0;
   var rootCs = getComputedStyle(document.documentElement);
+  var fontFaceRules = [];
+  var currentBase = location.href;
   function walkRules(rules) {
     for (var ri = 0; ri < rules.length && varCount < 600; ri++) {
       var rule = rules[ri];
+      // @font-face from same-origin sheets (fallback when the network capture missed a sheet)
+      if (rule.type === 5 && fontFaceRules.length < 200) {
+        fontFaceRules.push({ css: rule.cssText, base: currentBase });
+        continue;
+      }
       if (rule.cssRules && !rule.selectorText) {
         try {
           walkRules(rule.cssRules);
@@ -364,6 +371,7 @@
   }
   for (var ss = 0; ss < document.styleSheets.length; ss++) {
     try {
+      currentBase = document.styleSheets[ss].href || location.href;
       walkRules(document.styleSheets[ss].cssRules || []);
     } catch {
       /* cross-origin sheet; the server parses those from the network response instead */
@@ -602,5 +610,6 @@
     ctaLabels: ctaLabels,
     paragraphs: visibleTexts("p", 24, 30, 600),
     textElementCount: textElementCount,
+    fontFaceRules: fontFaceRules,
   };
 })

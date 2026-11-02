@@ -1,5 +1,5 @@
 // Generates a self-contained landing page (HTML string for an iframe srcdoc) purely from tokens.
-import { readableOn } from "../analyze/color";
+import { mixHex, readableOn } from "../analyze/color";
 import { contrastRatio, pickTextColor } from "../analyze/contrast";
 import { familyFor, familyStack, fontFaceCss } from "../fonts";
 import type { BrandGuide, ColorRoleName } from "../types";
@@ -27,14 +27,7 @@ function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s;
 }
 
-/** Linear sRGB-space mix of two #RRGGBB colours: amount of `a` over `b`. */
-export function mixHex(a: string, b: string, amount: number): string {
-  const pa = parseInt(a.slice(1, 7), 16);
-  const pb = parseInt(b.slice(1, 7), 16);
-  const ch = (n: number, shift: number) => (n >> shift) & 255;
-  const mix = (shift: number) => Math.round(ch(pa, shift) * amount + ch(pb, shift) * (1 - amount));
-  return `#${[16, 8, 0].map((sh) => mix(sh).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
-}
+export { mixHex };
 
 export interface DemoTokens {
   bg: string;
@@ -70,6 +63,13 @@ export function demoTokens(b: BrandGuide): DemoTokens {
   const cardRadius = radii.length ? `${Math.min(24, Math.max(...radii))}px` : "12px";
   const h1 = b.typography.scale.find((s) => s.tag === "h1");
   const surface = role("surface") ?? bg;
+  // Body copy must stay readable on both the page and the card surface (AA 4.5:1).
+  const readableText = (c: string, fallbacks: string[]) => {
+    const onBg = readableOn(c, bg, 4.5, fallbacks);
+    return contrastRatio(onBg, surface) >= 4.5 ? onBg : readableOn(onBg, surface, 4.5, fallbacks);
+  };
+  const safeText = readableText(text, []);
+  const safeMuted = readableText(role("muted") ?? text, [safeText]);
   const primaryText = readableOn(primary, bg, 3, [text]);
   const badgeBg = mixHex(primaryText, surface, 0.12);
   const badgeText = readableOn(primaryText, badgeBg, 3, [text]);
@@ -79,8 +79,9 @@ export function demoTokens(b: BrandGuide): DemoTokens {
     badgeBg,
     badgeText,
     surface,
-    text,
-    muted: role("muted") ?? text,
+    text: safeText,
+    muted: safeMuted,
+
     border: role("border") ?? text,
     primary,
     onPrimary,

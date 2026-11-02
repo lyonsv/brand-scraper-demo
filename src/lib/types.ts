@@ -178,6 +178,8 @@ export interface RawExtraction {
   ctaLabels: string[];
   paragraphs: string[];
   textElementCount: number;
+  /** @font-face rules read from same-origin stylesheets, with the sheet URL to resolve src against */
+  fontFaceRules?: Array<{ css: string; base: string }>;
 }
 
 export interface SampleResult {

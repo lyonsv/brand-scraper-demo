@@ -19,9 +19,16 @@ const state: BrowserState = (g.__brandScraperBrowser ??= { browser: null, active
 
 /**
  * Flags from @sparticuz/chromium that would relax browser security. Pages we scan are untrusted,
- * so we keep the same-origin policy, mixed-content blocking and site isolation that local runs have.
+ * so we keep the same-origin policy and mixed-content blocking that local runs have.
+ *
+ * `--disable-site-isolation-trials` is deliberately NOT stripped: @sparticuz runs Chromium with
+ * `--single-process`, and with site isolation on, any cross-site navigation (e.g. bechtle.de →
+ * bechtle.com) needs a renderer process swap that single-process mode can't do, so the whole
+ * browser dies ("Target page, context or browser has been closed"). Site isolation guards a
+ * user's cross-site data; this throwaway browser has no sessions, and the SSRF boundary is the
+ * egress proxy, which is unaffected.
  */
-export const UNSAFE_SERVERLESS_FLAGS = ["--disable-web-security", "--allow-running-insecure-content", "--disable-site-isolation-trials"];
+export const UNSAFE_SERVERLESS_FLAGS = ["--disable-web-security", "--allow-running-insecure-content"];
 
 export function serverlessArgs(base: string[]): string[] {
   return base.filter((a) => !UNSAFE_SERVERLESS_FLAGS.includes(a.split("=")[0]));

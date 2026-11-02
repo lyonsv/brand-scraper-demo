@@ -45,20 +45,17 @@
     var r = el.getBoundingClientRect();
     return r.width > 1 && r.height > 1;
   }
-  function docTop(el) {
-    return el.getBoundingClientRect().top + window.scrollY;
-  }
   function closestTag(el, sel) {
     try {
       return !!el.closest(sel);
-    } catch (e) {
+    } catch {
       return false;
     }
   }
   function abs(u) {
     try {
       return new URL(u, location.href).href;
-    } catch (e) {
+    } catch {
       return "";
     }
   }
@@ -168,7 +165,7 @@
   /* -------------------------------------------------------------- */
   /* CTA buttons & links                                              */
   /* -------------------------------------------------------------- */
-  var CTA_WORDS = /(get started|start|sign ?up|try|contact|book|demo|buy|join|download|free|subscribe|shop|learn more|explore|apply|create|request)/i;
+  var CTA_WORDS = /(get started|start|sign ?up|try|contact|book|demo|buy|join|download|free|subscribe|shop|learn more|explore|apply|create|request|deploy|order|register)/i;
   var buttons = [];
   var seenBtn = {};
   var btnEls = document.querySelectorAll(
@@ -191,8 +188,9 @@
     var score = 0;
     if (bgA >= 0.5) score += 3;
     if (top < 900) score += 3;
-    if (!inHeader && top < 1100) score += 2;
+    if (!inHeader && top < 1100) score += 3;
     if (inHeader) score += 1;
+    if (br.height >= 40) score += 1;
     if (CTA_WORDS.test(label)) score += 2;
     if (px(bcs.paddingLeft) >= 12) score += 1;
     var key2 = bcs.backgroundColor + "|" + label;
@@ -259,7 +257,7 @@
       if (rule.cssRules && !rule.selectorText) {
         try {
           walkRules(rule.cssRules);
-        } catch (e) {}
+        } catch {}
         continue;
       }
       if (!rule.selectorText || !rule.style) continue;
@@ -278,7 +276,7 @@
   for (var ss = 0; ss < document.styleSheets.length; ss++) {
     try {
       walkRules(document.styleSheets[ss].cssRules || []);
-    } catch (e) {
+    } catch {
       /* cross-origin sheet; the server parses those from the network response instead */
     }
   }
@@ -293,7 +291,7 @@
         fontFaces.push({ family: f.family.replace(/^["']|["']$/g, ""), weight: String(f.weight), style: f.style });
       }
     });
-  } catch (e) {}
+  } catch {}
 
   var typeSamples = Object.keys(typeBuckets).map(function (k) {
     return typeBuckets[k];
@@ -408,7 +406,7 @@
     try {
       if (cand.kind === "svg") cand.svg = serializeSvg(le);
       else cand.src = abs(le.currentSrc || le.src);
-    } catch (e) {
+    } catch {
       continue;
     }
     if (cand.kind === "svg" && (!cand.svg || cand.svg.length > 200000)) continue;

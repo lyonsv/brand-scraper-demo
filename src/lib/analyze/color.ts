@@ -1,5 +1,5 @@
 import {
-  useMode,
+  useMode as registerMode,
   modeA98,
   modeHsl,
   modeHwb,
@@ -22,21 +22,21 @@ import {
 import type { ColorCluster, ColorSource, Oklch } from "../types";
 
 // Register the colour spaces Chrome can hand back from getComputedStyle.
-useMode(modeRgb);
-useMode(modeLrgb);
-useMode(modeXyz65);
-useMode(modeXyz50);
-useMode(modeLab);
-useMode(modeLab65);
-useMode(modeLch);
-useMode(modeOklab);
-useMode(modeHsl);
-useMode(modeHwb);
-useMode(modeP3);
-useMode(modeRec2020);
-useMode(modeA98);
-useMode(modeProphoto);
-const toOklchMode = useMode(modeOklch);
+registerMode(modeRgb);
+registerMode(modeLrgb);
+registerMode(modeXyz65);
+registerMode(modeXyz50);
+registerMode(modeLab);
+registerMode(modeLab65);
+registerMode(modeLch);
+registerMode(modeOklab);
+registerMode(modeHsl);
+registerMode(modeHwb);
+registerMode(modeP3);
+registerMode(modeRec2020);
+registerMode(modeA98);
+registerMode(modeProphoto);
+const toOklchMode = registerMode(modeOklch);
 
 const ciede = differenceCiede2000();
 

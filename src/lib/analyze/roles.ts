@@ -74,12 +74,12 @@ export function pickPrimary(input: RoleInput): ColorRole | null {
     const v = vars[0];
     return makeRole("primary", v.parsed!.hex, v.parsed!.oklch, `CSS variable ${v.name}`);
   }
-  // 3. the top CTA even if neutral (monochrome brands such as black buttons)
-  const top = input.ctas[0] ? parseColor(input.ctas[0].bg) : null;
-  if (top && top.alpha >= 0.5) {
-    const bg = input.backgrounds[0]?.hex;
-    if (!bg || deltaE(bg, top.hex) > 10) {
-      return makeRole("primary", top.hex, top.oklch, `Background of the "${input.ctas[0].label}" call-to-action (monochrome brand)`);
+  // 3. a neutral CTA that stands out from the page (monochrome brands such as black buttons)
+  const pageBg = input.backgrounds[0]?.hex;
+  for (const cta of input.ctas.slice(0, 4)) {
+    const p = parseColor(cta.bg);
+    if (p && p.alpha >= 0.5 && (!pageBg || deltaE(pageBg, p.hex) > 10)) {
+      return makeRole("primary", p.hex, p.oklch, `Background of the "${cta.label}" call-to-action (monochrome brand)`);
     }
   }
   // 4. the most-used chromatic colour

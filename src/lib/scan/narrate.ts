@@ -70,7 +70,9 @@ export function narrateUi(u: UiElements, images: number): string {
 
 export function narrateVoice(v: Voice): string {
   const caseLabel = { sentence: "sentence case", title: "Title Case", upper: "ALL CAPS", mixed: "mixed case" }[v.stats.caseStyle];
-  let s = `Headlines average ${v.stats.avgHeadlineWords} words in ${caseLabel}; “you” appears ${v.stats.youRate}× per 100 words`;
+  let s = v.stats.avgHeadlineWords
+    ? `Headlines average ${v.stats.avgHeadlineWords} words in ${caseLabel}; “you” appears ${v.stats.youRate}× per 100 words`
+    : `No headings to analyse, so voice is based on the title “${v.title}”`;
   if (v.keywords.length) s += `; top keywords: ${v.keywords.slice(0, 4).join(", ")}`;
   if (v.ctas.length) s += `; CTAs like “${v.ctas[0]}”`;
   return `${s}.`;

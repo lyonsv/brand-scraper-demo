@@ -88,7 +88,7 @@ export function toButtonStyle(b: RawButton): ButtonStyle {
     background: bg,
     color: hexOr(b.color, "#111111"),
     border: b.borderWidth > 0 && borderHex ? `${b.borderWidth}px solid ${borderHex.hex}` : "none",
-    borderRadius: b.borderRadius || "0px",
+    borderRadius: normaliseRadius(b.borderRadius),
     padding: `${Math.round(b.paddingY)}px ${Math.round(b.paddingX)}px`,
     fontSize: b.fontSize,
     fontWeight: b.fontWeight,
@@ -97,6 +97,35 @@ export function toButtonStyle(b: RawButton): ButtonStyle {
     letterSpacing: b.letterSpacing,
     boxShadow: b.boxShadow,
   };
+}
+
+/** Drop invisible layers (fully transparent colour or all-zero offsets/blur/spread) from box-shadows. */
+export function cleanShadow(value: string): string {
+  const layers = value.split(/,(?![^(]*\))/).map((l) => l.trim());
+  const visible = layers.filter((l) => {
+    if (/rgba?\([^)]*,\s*0\)/.test(l) || /\/\s*0\)/.test(l) || /transparent/.test(l)) return false;
+    const nums = l.replace(/\([^)]*\)/g, "").match(/-?[\d.]+px/g) ?? [];
+    return nums.some((n) => parseFloat(n) !== 0);
+  });
+  return visible.join(", ");
+}
+
+function cleanShadows(map: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(map)) {
+    const c = cleanShadow(k);
+    if (c) out[c] = (out[c] ?? 0) + v;
+  }
+  return out;
+}
+
+/** Huge radii ("3.35544e+07px", "50%") are pills; render them as 9999px. */
+export function normaliseRadius(r: string): string {
+  if (!r) return "0px";
+  if (r.includes("%")) return "9999px";
+  const n = parseFloat(r);
+  if (!Number.isFinite(n)) return "0px";
+  return n >= 999 ? "9999px" : `${Math.round(n * 10) / 10}px`;
 }
 
 function topTokens(map: Record<string, number>, n: number, sortNumeric: boolean): Token[] {
@@ -140,7 +169,7 @@ export function analyzeUi(raw: RawExtraction, roles: ColorRole[]): UiElements {
       8,
       true,
     ),
-    shadows: topTokens(raw.shadows, 4, false),
+    shadows: topTokens(cleanShadows(raw.shadows), 4, false),
   };
 }
 

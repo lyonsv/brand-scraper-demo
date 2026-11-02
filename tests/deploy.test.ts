@@ -28,9 +28,9 @@ describe("serverless Chromium args", () => {
     const base = ["--single-process", "--disable-web-security", "--allow-running-insecure-content", "--disable-site-isolation-trials", "--no-sandbox", "--headless='shell'"];
     const out = serverlessArgs(base);
     for (const f of UNSAFE_SERVERLESS_FLAGS) expect(out).not.toContain(f);
-    // site-isolation-trials must stay disabled: single-process Chromium can't do the renderer
-    // swap a cross-site redirect needs, and crashes (regression: bechtle.de → bechtle.com).
-    expect(out).toEqual(["--single-process", "--disable-site-isolation-trials", "--no-sandbox", "--headless='shell'"]);
+    // --single-process is dropped: closing a context killed the shared browser (next scan failed).
+    // --disable-3d-apis is added: SwiftShader WebGL starved the renderer (stripe.com screenshots timed out).
+    expect(out).toEqual(["--no-sandbox", "--headless='shell'", "--disable-3d-apis"]);
     // the egress proxy is applied per context by Playwright, never via a launch flag
     expect(out.some((a) => a.startsWith("--proxy-server"))).toBe(false);
   });

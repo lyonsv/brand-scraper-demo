@@ -19,19 +19,28 @@ const state: BrowserState = (g.__brandScraperBrowser ??= { browser: null, active
 
 /**
  * Flags from @sparticuz/chromium that would relax browser security. Pages we scan are untrusted,
- * so we keep the same-origin policy and mixed-content blocking that local runs have.
- *
- * `--disable-site-isolation-trials` is deliberately NOT stripped: @sparticuz runs Chromium with
- * `--single-process`, and with site isolation on, any cross-site navigation (e.g. bechtle.de →
- * bechtle.com) needs a renderer process swap that single-process mode can't do, so the whole
- * browser dies ("Target page, context or browser has been closed"). Site isolation guards a
- * user's cross-site data; this throwaway browser has no sessions, and the SSRF boundary is the
- * egress proxy, which is unaffected.
+ * so we keep the same-origin policy, mixed-content blocking and site isolation that local runs have.
  */
-export const UNSAFE_SERVERLESS_FLAGS = ["--disable-web-security", "--allow-running-insecure-content"];
+export const UNSAFE_SERVERLESS_FLAGS = ["--disable-web-security", "--allow-running-insecure-content", "--disable-site-isolation-trials"];
+
+/**
+ * `--single-process` is dropped too: in single-process mode, closing a scan's browser context
+ * tears down the whole browser, so the next scan on a warm instance got "Target page, context or
+ * browser has been closed" from a dead shared browser. Multi-process Chromium runs fine on
+ * Vercel's Node runtime (verified on preview deploys: bechtle.de then stripe.com on one instance).
+ */
+export const DROPPED_SERVERLESS_FLAGS = ["--single-process"];
+
+/**
+ * Added on serverless: there's no GPU, so WebGL/3D is rendered by SwiftShader on ~1 vCPU. Decorative
+ * WebGL heroes (e.g. stripe.com's animated gradient) then starve the renderer, and screenshots
+ * time out at 8s while each scroll step takes 5–15s. Brand extraction doesn't need WebGL.
+ */
+export const EXTRA_SERVERLESS_FLAGS = ["--disable-3d-apis"];
 
 export function serverlessArgs(base: string[]): string[] {
-  return base.filter((a) => !UNSAFE_SERVERLESS_FLAGS.includes(a.split("=")[0]));
+  const drop = [...UNSAFE_SERVERLESS_FLAGS, ...DROPPED_SERVERLESS_FLAGS];
+  return [...base.filter((a) => !drop.includes(a.split("=")[0])), ...EXTRA_SERVERLESS_FLAGS];
 }
 
 async function launch(): Promise<Browser> {
@@ -43,13 +52,32 @@ async function launch(): Promise<Browser> {
   // version-matched to playwright-core (Chromium 153 ↔ playwright-core 1.63). Loaded lazily so
   // local dev never touches it.
   const [{ default: Sparticuz }, { ensureServerlessFonts }] = await Promise.all([import("@sparticuz/chromium"), import("./fonts-serverless")]);
+  // ORDER MATTERS: executablePath() unpacks fonts.tar.br (fonts.conf + Open Sans) into /tmp/fonts,
+  // but skips it if /tmp/fonts already exists. Creating that directory first (for our fallback
+  // fonts) left Chromium with no fontconfig config at all, and single-process Chromium then
+  // aborted on the first font fallback (FATAL SkFontMgr_FontConfigInterface.cpp "Not implemented").
+  const executablePath = await Sparticuz.executablePath();
   await ensureServerlessFonts();
-  return chromium.launch({
+  // Diagnostics / experiments for preview deploys (never needed in production):
+  //   BS_DEBUG=1                 log Chromium's stderr and protocol-level browser events
+  //   BS_CHROMIUM_DROP=--a,--b   drop flags from the @sparticuz set
+  //   BS_CHROMIUM_ADD=--c,--d    append flags
+  const list = (v: string | undefined) => (v ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+  const drop = list(process.env.BS_CHROMIUM_DROP);
+  const args = [...serverlessArgs(Sparticuz.args).filter((a) => !drop.includes(a.split("=")[0])), ...list(process.env.BS_CHROMIUM_ADD)];
+  console.error(`[chromium] launching (debug=${process.env.BS_DEBUG ?? "off"}) with ${args.join(" ")}`);
+  const browser = await chromium.launch({
     headless: true,
     timeout: 30_000,
-    executablePath: await Sparticuz.executablePath(),
-    args: serverlessArgs(Sparticuz.args),
+    executablePath,
+    args,
+    logger:
+      process.env.BS_DEBUG === "1"
+        ? { isEnabled: (name) => name === "browser", log: (name, _sev, message) => console.error(`[pw:${name}] ${String(message).slice(0, 500)}`) }
+        : undefined,
   });
+  browser.on("disconnected", () => console.error("[chromium] browser disconnected"));
+  return browser;
 }
 
 export function getBrowser(): Promise<{ browser: Browser; reused: boolean }> {

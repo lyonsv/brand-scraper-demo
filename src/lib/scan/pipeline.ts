@@ -25,7 +25,7 @@ import type {
   WeightMap,
 } from "../types";
 import { assertPublicUrl, createHostGuard, normalizeUrl } from "../url";
-import { acquireSlot, getBrowser } from "./browser";
+import { acquireSlot, getBrowser, isServerless } from "./browser";
 import { dismissCookieBanners } from "./cookies";
 import { getEgressProxyPort } from "./egress";
 import { fmt, narrateColors, narrateLogo, narrateTypography, narrateUi, narrateVoice, plural } from "./narrate";
@@ -198,12 +198,28 @@ async function detectChallenge(page: Page, response: Response | null): Promise<s
 export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): Promise<void> {
   const started = Date.now();
   let current: { id: StepId; title: string } | null = null;
+  const timings: string[] = [];
+  let stepStarted = Date.now();
+  const log = (msg: string) => console.error(`[scan ${rawUrl}] +${((Date.now() - started) / 1000).toFixed(1)}s ${msg}`);
+  let shotPage: Page | null = null;
+  /** Screenshot and emit; failed or empty captures are logged and dropped, never sent. */
+  const emitShot = async (label: string): Promise<boolean> => {
+    if (!shotPage) return false;
+    const t0 = Date.now();
+    const data = await shot(shotPage);
+    log(`shot "${label}" ${data ? `${Math.round((data.length * 3) / 4 / 1024)}KB` : "FAILED"} in ${Date.now() - t0}ms`);
+    if (!data) return false;
+    emit({ type: "shot", label, data });
+    return true;
+  };
   const begin = (id: StepId, title: string) => {
+    stepStarted = Date.now();
     current = { id, title };
     emit({ type: "step", id, status: "running", title });
   };
   const done = (detail: string, status: "done" | "warn" = "done") => {
     if (!current) return;
+    timings.push(`${current.id}=${((Date.now() - stepStarted) / 1000).toFixed(1)}s`);
     emit({ type: "step", id: current.id, status, title: current.title, detail });
     current = null;
   };
@@ -250,6 +266,8 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
       serviceWorkers: "block",
       acceptDownloads: false,
       javaScriptEnabled: true,
+      // serverless has ~1 vCPU and software rendering: ask sites to stop their animations
+      ...(isServerless() ? { reducedMotion: "reduce" as const } : {}),
       // all browser traffic goes through the local egress proxy, which refuses private IPs at connect time
       proxy: { server: `http://127.0.0.1:${proxyPort}` },
     });
@@ -257,6 +275,15 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
     let blockedRequests = 0;
     let blockedPrivate: string | null = null;
     const page = await context.newPage();
+    shotPage = page;
+    // lifecycle diagnostics: these show up in `vercel logs` and explain "Target closed" errors
+    context.on("close", () => log(`context closed (step ${current?.id ?? "-"})`));
+    page.on("crash", () => log(`PAGE CRASHED (step ${current?.id ?? "-"}, url ${page.url()})`));
+    page.on("close", () => log(`page closed (step ${current?.id ?? "-"})`));
+    browser.once("disconnected", () => log(`BROWSER DISCONNECTED (step ${current?.id ?? "-"})`));
+    page.on("framenavigated", (f) => {
+      if (f === page.mainFrame()) log(`main frame → ${f.url().slice(0, 120)}`);
+    });
     await context.route("**/*", async (route) => {
       const req = route.request();
       const reqUrl = req.url();
@@ -350,7 +377,7 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
     if (status >= 400) throw new ScanError("nav_failed", `The site answered with HTTP ${status}.`);
     const finalUrl = page.url();
     const redirected = new URL(finalUrl).href !== url.href;
-    emit({ type: "shot", label: "Initial viewport", data: await shot(page) });
+    const initialShot = await emitShot("Initial viewport");
     done(
       `HTTP ${status} in ${fmt(Date.now() - navStart)}ms${redirected ? `, redirected to ${new URL(finalUrl).host}${new URL(finalUrl).pathname}` : ""}; network ${networkIdle ? "went idle" : "still busy after 5s, moving on"}${blockedRequests ? `; blocked ${plural(blockedRequests, "tracker/media request")}` : ""}.`,
     );
@@ -380,9 +407,14 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
       page.evaluate(`(function(y){var el=document.querySelector("[data-bs-scroller]"); if (el) el.scrollTop=y; else window.scrollTo(0,y);})(${y})`);
     const scrollHeight = async () => Number(await page.evaluate(`(function(){var el=document.querySelector("[data-bs-scroller]"); return el ? el.scrollHeight : Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);})()`)) || docHeight;
     const stepPx = Math.round(900 * 0.85);
-    const steps = Math.min(12, Math.max(1, Math.ceil((docHeight - 900) / stepPx)));
-    const shotAt = new Set([Math.round(steps * 0.25), Math.round(steps * 0.5), Math.round(steps * 0.75), steps].filter((n) => n >= 1));
-    let shots = 1;
+    // Serverless renders in software on ~1 vCPU: fewer steps and one mid-scroll shot keep scans well
+    // inside the 90s budget. Locally we can afford the full sweep.
+    const lean = isServerless();
+    const steps = Math.min(lean ? 8 : 12, Math.max(1, Math.ceil((docHeight - 900) / stepPx)));
+    const shotAt = new Set(
+      (lean ? [Math.round(steps * 0.5)] : [Math.round(steps * 0.25), Math.round(steps * 0.5), Math.round(steps * 0.75), steps]).filter((n) => n >= 1),
+    );
+    let shots = initialShot ? 1 : 0;
     for (let i = 1; i <= steps; i++) {
       check();
       await scrollTo(i * stepPx);
@@ -395,20 +427,18 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
       }
       if (shotAt.has(i) && shots < 4) {
         const pct = Math.min(100, Math.round(((i * stepPx + 900) / docHeight) * 100));
-        emit({ type: "shot", label: `Scrolled ${pct}%`, data: await shot(page) });
-        shots++;
+        if (await emitShot(`Scrolled ${pct}%`)) shots++;
       }
     }
     await scrollTo(0);
     await sleep(350);
     // finish on the hero again so the panel ends on the recognisable view, not the footer
-    emit({ type: "shot", label: "Back to top", data: await shot(page) });
-    shots++;
+    if (await emitShot("Back to top")) shots++;
     const newHeight = await scrollHeight();
     const covered = Math.min(newHeight, steps * stepPx + 900);
     const coverPct = Math.round((covered / Math.max(newHeight, 1)) * 100);
     done(
-      `Scrolled ${plural(steps, "step")}, covering ${fmt(covered)}px of a ${fmt(newHeight)}px page (${coverPct}%${coverPct < 100 ? (steps >= 12 ? ", capped at 12 steps" : ", the rest loaded after the last step") : ""})${newHeight > docHeight + 200 ? `; it grew from ${fmt(docHeight)}px as content lazy-loaded` : ""}. Sampled ${fmt(samplePoints)} background points and captured ${plural(shots, "screenshot")}.`,
+      `Scrolled ${plural(steps, "step")}, covering ${fmt(covered)}px of a ${fmt(newHeight)}px page (${coverPct}%${coverPct < 100 ? (steps >= (lean ? 8 : 12) ? `, capped at ${steps} steps` : ", the rest loaded after the last step") : ""})${newHeight > docHeight + 200 ? `; it grew from ${fmt(docHeight)}px as content lazy-loaded` : ""}. Sampled ${fmt(samplePoints)} background points and captured ${plural(shots, "screenshot")}.`,
     );
     check();
 
@@ -578,9 +608,11 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
     emit({ type: "done", brand });
   } catch (err) {
     const scanErr = toScanError(err, signal);
+    log(`FAILED at ${(current as { id: StepId } | null)?.id ?? "-"}: ${scanErr.code} ${err instanceof Error ? (err.stack ?? err.message).slice(0, 800) : String(err)}`);
     if (current) done(scanErr.message, "warn");
     emit({ type: "error", code: scanErr.code, message: scanErr.message });
   } finally {
+    log(`timings ${timings.join(" ")} total=${((Date.now() - started) / 1000).toFixed(1)}s`);
     signal.removeEventListener("abort", onAbort);
     await context?.close().catch(() => undefined);
     release?.();
@@ -627,7 +659,12 @@ function listAddresses(addresses: string[]): string {
 }
 
 async function shot(page: Page): Promise<string> {
-  const buf = await page.screenshot({ type: "jpeg", quality: 60, timeout: 8000 }).catch(() => null);
+  const buf = await page
+    .screenshot({ type: "jpeg", quality: 60, timeout: 8000, animations: "disabled", caret: "hide" })
+    .catch((e) => {
+      console.error(`[scan] screenshot failed: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
+      return null;
+    });
   return buf ? buf.toString("base64") : "";
 }
 

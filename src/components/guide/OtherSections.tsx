@@ -57,7 +57,7 @@ function ButtonSpec({ title, b, canvas }: { title: string; b: ButtonStyle; canva
 export function UiSection({ ui, canvas }: { ui: UiElements; canvas: string }) {
   return (
     <div className="space-y-8">
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {ui.primaryButton ? <ButtonSpec title="Primary button" b={ui.primaryButton} canvas={canvas} /> : <Empty>No primary button found.</Empty>}
         {ui.secondaryButton ? <ButtonSpec title="Secondary button" b={ui.secondaryButton} canvas={canvas} /> : <Empty>No secondary button found.</Empty>}
         <div className="rounded-2xl border border-line p-4">
@@ -81,7 +81,7 @@ export function UiSection({ ui, canvas }: { ui: UiElements; canvas: string }) {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div>
           <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">Radius</p>
           <div className="flex flex-wrap gap-3">
@@ -141,7 +141,7 @@ export function ImagerySection({ images }: { images: ImageAsset[] }) {
 export function VoiceSection({ voice }: { voice: Voice }) {
   const caseLabel = { sentence: "Sentence case", title: "Title Case", upper: "ALL CAPS", mixed: "Mixed case" }[voice.stats.caseStyle];
   return (
-    <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
       <div>
         <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Headlines</p>
         <blockquote className="text-2xl font-semibold leading-snug tracking-tight">“{voice.headline}”</blockquote>

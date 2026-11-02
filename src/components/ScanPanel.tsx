@@ -152,9 +152,9 @@ export default function ScanPanel({ state }: { state: ScanState }) {
   }, [state.steps, scrollToEnd]);
 
   return (
-    <section aria-label="Scan progress" className="grid gap-6 lg:grid-cols-[1.15fr_1fr]">
+    <section aria-label="Scan progress" className="grid grid-cols-1 gap-6 lg:grid-cols-[1.15fr_1fr]">
       <BrowserFrame state={state} />
-      <div className="flex min-h-0 flex-col rounded-2xl border border-line bg-card p-5">
+      <div className="flex min-h-0 min-w-0 flex-col rounded-2xl border border-line bg-card p-5">
         <div className="flex flex-wrap items-center gap-3">
           <StatusPill status={state.status} />
           <span className="min-w-0 truncate text-sm text-muted">{state.url}</span>

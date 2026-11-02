@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // keep the dev-mode badge out of UI screenshots
+  devIndicators: false,
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {

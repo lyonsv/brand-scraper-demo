@@ -97,7 +97,7 @@ export default function ColorSection({ palette }: { palette: ColorPalette }) {
       {palette.pairs.length ? (
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Contrast checks (WCAG 2)</p>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {palette.pairs.map((p) => (
               <div key={p.label} className="flex items-center gap-3 rounded-xl border border-line p-2.5">
                 <span className="flex h-9 w-12 items-center justify-center rounded-lg text-sm font-semibold" style={{ background: p.bgHex, color: p.fgHex }}>

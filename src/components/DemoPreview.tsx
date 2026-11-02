@@ -61,7 +61,7 @@ export default function DemoPreview({ brand }: { brand: BrandGuide }) {
 
       <div ref={boxRef} className="w-full">
         <div
-          className={`mx-auto overflow-hidden border border-line bg-white shadow-[0_20px_50px_-24px_rgba(0,0,0,0.35)] ${mode === "mobile" ? "rounded-[36px] border-[10px] border-[#18181b]" : "rounded-2xl"}`}
+          className={`mx-auto overflow-hidden bg-white shadow-[0_20px_50px_-24px_rgba(0,0,0,0.35)] ${mode === "mobile" ? "rounded-[36px] border-[10px] border-[#18181b]" : "rounded-2xl border border-line"}`}
           style={{ width: frameW * scale + (mode === "mobile" ? 20 : 2), height: frameH * scale + (mode === "mobile" ? 20 : 2) + (mode === "desktop" ? 34 : 0) }}
         >
           {mode === "desktop" ? (

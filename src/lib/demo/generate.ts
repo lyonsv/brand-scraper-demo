@@ -122,6 +122,7 @@ export function buildDemoHtml(b: BrandGuide): string {
 <style>
 ${fontFaceCss(b.typography.families)}
 *{box-sizing:border-box;margin:0;padding:0}
+html,body{overflow-x:hidden}
 body{background:${t.bg};color:${t.text};font-family:${t.bodyFont};font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased}
 a{color:inherit;text-decoration:none}
 .wrap{max-width:1160px;margin:0 auto;padding:0 32px}
@@ -134,7 +135,7 @@ nav{display:flex;align-items:center;justify-content:space-between;height:72px;bo
 .btn-primary{background:${t.primary};color:${t.onPrimary}}
 .btn-ghost{border-color:${ghostBorder};color:${t.text}}
 .btn-sm{padding:8px 14px;font-size:14px}
-.hero{position:relative;padding:96px 0 80px;overflow:hidden}
+.hero{position:relative;padding:96px 0 80px}
 .hero .glow{position:absolute;inset:-40% -10% auto auto;width:720px;height:720px;border-radius:50%;background:radial-gradient(circle at center, ${t.primary}33, ${t.secondary}14 45%, transparent 70%);pointer-events:none}
 .hero h1{font-size:64px;max-width:820px;position:relative}
 .hero p{font-size:20px;color:${t.muted};max-width:640px;margin-top:24px;position:relative}

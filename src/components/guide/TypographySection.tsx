@@ -12,11 +12,11 @@ export default function TypographySection({ typography }: { typography: Typograp
   return (
     <div className="space-y-8">
       {css ? <style>{css}</style> : null}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {typography.families.map((f) => {
           const stack = familyStack(f);
           return (
-            <div key={f.family} className="rounded-2xl border border-line p-5">
+            <div key={f.family} className="min-w-0 rounded-2xl border border-line p-5">
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <p className="truncate text-lg font-semibold">{f.family}</p>
@@ -31,9 +31,9 @@ export default function TypographySection({ typography }: { typography: Typograp
               </div>
               <div className="mt-5 space-y-2">
                 {previewWeights(f.weights).map((w) => (
-                  <p key={w} className="flex items-baseline gap-3">
+                  <p key={w} className="flex min-w-0 items-baseline gap-3">
                     <span className="w-9 shrink-0 font-mono text-[11px] text-muted">{w}</span>
-                    <span className="truncate text-xl" style={{ fontFamily: stack, fontWeight: w }}>
+                    <span className="min-w-0 truncate text-xl" style={{ fontFamily: stack, fontWeight: w }}>
                       {PANGRAM}
                     </span>
                   </p>

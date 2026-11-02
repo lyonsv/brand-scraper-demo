@@ -8,7 +8,7 @@ Everything is deterministic. There are **no LLM calls**: every "thinking" senten
 
 ```bash
 pnpm install
-pnpm exec playwright install chromium   # once, if the matching browser build is missing
+pnpm exec playwright install chromium   # once: the Chromium build matching playwright-core 1.63
 pnpm dev                                 # http://localhost:3210
 ```
 
@@ -19,6 +19,30 @@ pnpm dev                                 # http://localhost:3210
 | `pnpm lint`, `pnpm typecheck` | ESLint, `tsc --noEmit` |
 | `pnpm smoke <url> [...]` | Streams `/api/scan` on a running server and asserts `done` has a primary colour, at least one font and a logo or icon. `--allow-minimal` drops the logo requirement, `--allow-error` accepts a clean error event. `BASE_URL` overrides the server. |
 | `pnpm shot <url> [dir]` | Drives the UI in Chromium and saves idle, mid-scan, full-page and demo screenshots (`WIDTH=390` for mobile) |
+
+## Deploy (Vercel)
+
+The app deploys to Vercel as-is (Next.js preset, no `vercel.json` needed):
+
+```bash
+vercel        # preview
+vercel --prod
+```
+
+How the serverless path differs from local:
+
+| | Local (`pnpm dev`) | Vercel (`process.env.VERCEL` set) |
+| --- | --- | --- |
+| Browser | `playwright-core` driving the Chromium installed by `pnpm exec playwright install chromium` (the `playwright` package is a devDependency, used only for that CLI) | `playwright-core` driving `@sparticuz/chromium@153`, version-matched to `playwright-core@1.63` (both Chromium 153) |
+| Chromium flags | Playwright defaults | `@sparticuz/chromium` args, minus `--disable-web-security`, `--allow-running-insecure-content` and `--disable-site-isolation-trials` (see `serverlessArgs`) |
+| Egress proxy | in-process on 127.0.0.1, applied per context | the same, started per function instance |
+| Fonts | system fonts | Open Sans (bundled), plus Noto Color Emoji and Noto Sans SC downloaded to `/tmp/fonts` on cold start (~19 MB, about 1s). Override with `BS_FONT_URLS` (comma-separated https URLs, empty to disable) |
+| Rate limits | off (set `BS_RATE_LIMIT=1` to test) | 5 scans and 240 font requests per IP per 10 minutes, per instance (`BS_SCAN_LIMIT`, `BS_FONT_LIMIT`) |
+| Concurrency | 2 scans, extra requests queue up to 60s | 2 scans per instance, extra requests get a `busy` error after 3s |
+
+Function config: `/api/scan` declares `runtime = "nodejs"` and `maxDuration = 120`. The scan aborts itself at 90s. `next.config.ts` keeps `playwright-core` and `@sparticuz/chromium` external, traces `@sparticuz/chromium/bin/**` and the in-page scripts (`src/lib/extract/*.js`, read from disk at runtime) into `/api/scan`, and excludes `playwright` and local browser downloads. The traced `/api/scan` function is about 85 MB uncompressed (about 70 MB of that is the brotli-packed Chromium), well under Vercel's 250 MB limit. Node is pinned to 24.x through `engines`; `@sparticuz/chromium@153` needs Node ≥ 22.17. Give the function plenty of memory: 2 GB or more is recommended for Chromium.
+
+Upgrading: bump `playwright-core`, `playwright` and `@sparticuz/chromium` together so their Chromium majors match. The `browsers.json` file in `playwright-core` gives its Chromium version.
 
 ## Architecture
 
@@ -76,3 +100,4 @@ Secondary and accent are the next chromatic clusters at least 30° of hue away. 
 - Primary-colour heuristics are tuned on a handful of sites. Vercel now gets its design-system blue (`--ds-blue-700`) rather than black, and Linear gets `--color-indigo`.
 - Voice analysis is surface-level: word counts, casing, punctuation, "you" frequency and keyword counts. It doesn't read for meaning.
 - Only one Chromium per process, with at most 2 concurrent scans. There is no persistence or caching of results.
+- Rate limits are in memory per instance. On Vercel, concurrent instances and cold starts each get fresh counters, so this slows casual abuse rather than enforcing a global quota. Use a shared store (Upstash, Vercel KV) or Vercel Firewall rules if you need a hard global limit.

@@ -1,11 +1,18 @@
 // Minimal font proxy so extracted web fonts can be previewed even when the origin does not send
 // CORS headers. Only public hosts (checked at connect time) and only real font files are relayed.
+import { clientIp, limits, rateLimitEnabled } from "@/lib/ratelimit";
 import { fetchPublic, sniffFont } from "@/lib/scan/egress";
+
+export const runtime = "nodejs";
 
 const MAX_BYTES = 3 * 1024 * 1024;
 const TYPES = { woff2: "font/woff2", woff: "font/woff", ttf: "font/ttf", otf: "font/otf" } as const;
 
 export async function GET(req: Request): Promise<Response> {
+  if (rateLimitEnabled()) {
+    const rl = limits.font.check(clientIp(req.headers));
+    if (!rl.ok) return new Response("rate limited", { status: 429, headers: { "Retry-After": String(rl.retryAfter) } });
+  }
   const target = new URL(req.url).searchParams.get("url") ?? "";
   let url: URL;
   try {

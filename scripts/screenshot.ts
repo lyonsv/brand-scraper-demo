@@ -6,7 +6,7 @@
  */
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { chromium } from "playwright";
+import { chromium } from "playwright-core";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3210";
 const target = process.argv[2] ?? "stripe.com";

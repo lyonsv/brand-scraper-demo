@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import type { BrowserContext, Page, Response } from "playwright";
+import type { BrowserContext, Page, Response } from "playwright-core";
 import {
   analyzeColors,
   analyzeUi,
@@ -238,7 +238,8 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
     const slot = await acquireSlot(signal);
     release = slot.release;
     const launchStart = Date.now();
-    const { browser, reused } = await getBrowser();
+    // A cold serverless launch (extract + start Chromium) must still honour the 90s scan budget.
+    const { browser, reused } = await untilAborted(getBrowser(), signal);
     const guard = createHostGuard();
     const proxyPort = await getEgressProxyPort();
     context = await browser.newContext({
@@ -584,6 +585,25 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
     await context?.close().catch(() => undefined);
     release?.();
   }
+}
+
+/** Reject as soon as `signal` aborts, even if `p` never settles (e.g. a hung browser launch). */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
 }
 
 function toScanError(err: unknown, signal: AbortSignal): ScanError {

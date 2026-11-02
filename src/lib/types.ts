@@ -26,6 +26,8 @@ export type ErrorCode =
   | "bot_protected"
   | "timeout"
   | "nav_failed"
+  | "rate_limited"
+  | "busy"
   | "internal";
 
 export interface StartEvent {

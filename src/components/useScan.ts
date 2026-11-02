@@ -80,7 +80,9 @@ export function useScan() {
         body: JSON.stringify({ url }),
         signal: ctrl.signal,
       });
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      // error responses (429 rate_limited) still carry an NDJSON error event
+      const isNdjson = (res.headers.get("content-type") ?? "").includes("ndjson");
+      if (!res.body || (!res.ok && !isNdjson)) throw new Error(`HTTP ${res.status}`);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";

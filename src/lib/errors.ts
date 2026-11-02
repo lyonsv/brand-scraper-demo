@@ -15,5 +15,7 @@ export const FRIENDLY_ERRORS: Record<ErrorCode, string> = {
   bot_protected: "This site is protected by a bot challenge, so a headless browser can't see it.",
   timeout: "The site took too long to load and analyse. Try again or pick another URL.",
   nav_failed: "We couldn't load that page. Check the address and that the site is up.",
+  rate_limited: "You've hit the scan limit for now. This public demo allows a few scans every 10 minutes.",
+  busy: "The scanner is busy with other scans right now. Please try again in a minute.",
   internal: "Something went wrong on our side while scanning. Please try again.",
 };

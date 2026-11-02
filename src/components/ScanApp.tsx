@@ -176,7 +176,7 @@ export default function ScanApp() {
         ) : null}
       </div>
 
-      <footer className="mt-20 text-center text-xs text-muted">Runs locally with headless Chromium. Extracted assets belong to their owners.</footer>
+      <footer className="mt-20 text-center text-xs text-muted">Scans run in headless Chromium on the server. Extracted assets belong to their owners.</footer>
     </main>
   );
 }

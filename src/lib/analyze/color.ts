@@ -63,12 +63,31 @@ export function parseColor(input: string): ParsedColor | null {
   const key = input.trim().toLowerCase();
   if (cache.has(key)) return cache.get(key) ?? null;
   let result: ParsedColor | null = null;
-  const color = parse(key);
+  // Unresolved CSS functions can't be evaluated here, and culori throws on some of them (calc()).
+  // Only real colour syntax: #hex, a colour function, or a bare keyword. culori would otherwise
+  // read e.g. a font-weight "300" as the hex colour #330000.
+  const syntaxOk = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.test(key) || /^[a-z-]+\(/.test(key) || (/^[a-z]+$/.test(key) && !/^[a-f]+$/.test(key));
+  if (!syntaxOk || key.length > 120 || /(calc|var|env|attr|min|max|clamp)\(/.test(key) || /^(inherit|initial|unset|revert|currentcolor|none)$/.test(key)) {
+    cache.set(key, null);
+    return null;
+  }
+  let color: ReturnType<typeof parse>;
+  try {
+    color = parse(key);
+  } catch {
+    color = undefined;
+  }
   if (color) {
     const alpha = color.alpha ?? 1;
     if (alpha >= 0.05) {
-      const ok = toOklchMode(color);
-      const hex = formatHex(color);
+      let ok: ReturnType<typeof toOklchMode> | undefined;
+      let hex: string | undefined;
+      try {
+        ok = toOklchMode(color);
+        hex = formatHex(color);
+      } catch {
+        ok = undefined;
+      }
       if (ok && hex) {
         result = {
           hex: hex.toUpperCase(),

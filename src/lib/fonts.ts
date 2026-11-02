@@ -60,3 +60,9 @@ export function previewWeights(weights: string[]): number[] {
   if (!out.size) out.add(400);
   return [...out].sort((a, b) => a - b).slice(0, 5);
 }
+
+/** "400" → "400"; "1 1000" (variable font axis range) → "1–1000 (variable)". */
+export function formatWeight(w: string): string {
+  const nums = w.trim().split(/\s+/);
+  return nums.length === 2 ? `${nums[0]}–${nums[1]} (variable)` : w;
+}

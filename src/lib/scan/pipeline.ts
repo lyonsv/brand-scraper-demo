@@ -16,6 +16,7 @@ import { ScanError } from "../errors";
 import type {
   BrandGuide,
   IconAsset,
+  ImageAsset,
   RawExtraction,
   SampleResult,
   ScanEvent,
@@ -25,6 +26,7 @@ import type {
 import { assertPublicUrl, createHostGuard, normalizeUrl } from "../url";
 import { acquireSlot, getBrowser } from "./browser";
 import { dismissCookieBanners } from "./cookies";
+import { getEgressProxyPort } from "./egress";
 import { fmt, narrateColors, narrateLogo, narrateTypography, narrateUi, narrateVoice, plural } from "./narrate";
 
 export type Emit = (event: ScanEvent) => void;
@@ -151,6 +153,7 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
     const launchStart = Date.now();
     const { browser, reused } = await getBrowser();
     const guard = createHostGuard();
+    const proxyPort = await getEgressProxyPort();
     context = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       userAgent: USER_AGENT,
@@ -159,6 +162,8 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
       serviceWorkers: "block",
       acceptDownloads: false,
       javaScriptEnabled: true,
+      // all browser traffic goes through the local egress proxy, which refuses private IPs at connect time
+      proxy: { server: `http://127.0.0.1:${proxyPort}` },
     });
     if (signal.aborted) onAbort();
     let blockedRequests = 0;
@@ -169,6 +174,11 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
       const reqUrl = req.url();
       if (reqUrl.startsWith("data:") || reqUrl.startsWith("blob:")) return route.continue();
       const type = req.resourceType();
+      // embedded documents (iframes) add nothing to a brand scan and widen the attack surface
+      if (type === "document" && req.frame() !== page.mainFrame()) {
+        blockedRequests++;
+        return route.abort("blockedbyclient").catch(() => undefined);
+      }
       if (type === "media" || BLOCKED_HOSTS.some((h) => reqUrl.includes(h))) {
         blockedRequests++;
         return route.abort("blockedbyclient").catch(() => undefined);
@@ -230,6 +240,9 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
       check();
       if (blockedPrivate) throw new ScanError("blocked_url", `The site redirected to a private address (${blockedPrivate}).`);
       const msg = e instanceof Error ? e.message : String(e);
+      if (/ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED/.test(msg)) {
+        throw new ScanError("blocked_url", "The site (or a redirect) points to a private or unreachable address.");
+      }
       if (/Timeout/i.test(msg)) throw new ScanError("timeout", "The page did not finish loading within 30 seconds.");
       throw new ScanError("nav_failed", `Navigation failed: ${msg.split("\n")[0].replace(/^page\.goto: /, "")}`);
     }
@@ -288,7 +301,7 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
         samplePoints += s.points;
         viewports++;
       }
-      if (shotAt.has(i) && shots < 5) {
+      if (shotAt.has(i) && shots < 4) {
         const pct = Math.min(100, Math.round(((i * stepPx + 900) / docHeight) * 100));
         emit({ type: "shot", label: `Scrolled ${pct}%`, data: await shot(page) });
         shots++;
@@ -296,9 +309,14 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
     }
     await page.evaluate("window.scrollTo(0, 0)");
     await sleep(350);
+    // finish on the hero again so the panel ends on the recognisable view, not the footer
+    emit({ type: "shot", label: "Back to top", data: await shot(page) });
+    shots++;
     const newHeight = Number(await page.evaluate("document.documentElement.scrollHeight")) || docHeight;
+    const covered = Math.min(newHeight, steps * stepPx + 900);
+    const coverPct = Math.round((covered / Math.max(newHeight, 1)) * 100);
     done(
-      `Scrolled ${plural(steps, "step")} through ${fmt(newHeight)}px of page${newHeight > docHeight + 200 ? ` (grew from ${fmt(docHeight)}px as content lazy-loaded)` : ""}, sampling ${fmt(samplePoints)} background points and capturing ${plural(shots, "screenshot")}.`,
+      `Scrolled ${plural(steps, "step")}, covering ${fmt(covered)}px of a ${fmt(newHeight)}px page (${coverPct}%${coverPct < 100 ? (steps >= 12 ? ", capped at 12 steps" : ", the rest loaded after the last step") : ""})${newHeight > docHeight + 200 ? `; it grew from ${fmt(docHeight)}px as content lazy-loaded` : ""}. Sampled ${fmt(samplePoints)} background points and captured ${plural(shots, "screenshot")}.`,
     );
     check();
 
@@ -333,45 +351,92 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
     /* 7. analyse -------------------------------------------------- */
     const domain = new URL(finalUrl).hostname.replace(/^www\./, "");
 
+    // Each analysis section is isolated: a failure degrades that section (warn step + empty
+    // value) instead of killing the whole scan.
+    const section = <T,>(compute: () => T, fallback: T, narrate: (v: T) => string, ok: (v: T) => boolean = () => true): T => {
+      try {
+        const value = compute();
+        done(narrate(value), ok(value) ? "done" : "warn");
+        return value;
+      } catch (e) {
+        console.error(`[scan] ${current?.id ?? "analysis"} failed`, e);
+        done(`Couldn't analyse this part of the page (${e instanceof Error ? e.message.slice(0, 120) : "unknown error"}); showing what we have.`, "warn");
+        return fallback;
+      }
+    };
+
     begin("colors", "Clustering colours");
-    const colors = analyzeColors(raw, samplePoints);
+    const colors = section(
+      () => analyzeColors(raw, samplePoints),
+      { roles: [], all: [], pairs: [], samplePoints },
+      (c) => narrateColors(c, viewports),
+    );
     emit({ type: "partial", key: "colors", value: colors });
-    done(narrateColors(colors, viewports));
 
     begin("typography", "Identifying typography");
-    const typography = buildTypography({
-      families: raw.families,
-      headingFamilies: raw.headingFamilies,
-      fontFaces: raw.fontFaces,
-      typeSamples: raw.typeSamples,
-      parsedFaces,
-    });
+    const typography = section(
+      () =>
+        buildTypography({
+          families: raw.families,
+          headingFamilies: raw.headingFamilies,
+          fontFaces: raw.fontFaces,
+          typeSamples: raw.typeSamples,
+          parsedFaces,
+        }),
+      { families: [], headingFamily: "system-ui", bodyFamily: "system-ui", scale: [], ratio: null, baseSize: 16 },
+      narrateTypography,
+      (t) => t.families.length > 0,
+    );
     emit({ type: "partial", key: "typography", value: typography });
-    done(narrateTypography(typography), typography.families.length ? "done" : "warn");
 
     begin("logo", "Scoring logo candidates");
-    const logo = buildLogoSet(raw, pngLogo, manifestIcons);
+    const logo = section(
+      () => buildLogoSet(raw, pngLogo, manifestIcons),
+      { primary: null, alternates: [], icons: [] },
+      (l) => narrateLogo(l, raw.logos.length),
+      (l) => !!l.primary || l.icons.length > 0,
+    );
     emit({ type: "partial", key: "logo", value: logo });
-    done(narrateLogo(logo, raw.logos.length), logo.primary || logo.icons.length ? "done" : "warn");
 
     begin("ui", "Measuring UI elements");
-    const ui = analyzeUi(raw, colors.roles);
-    const imagery = buildImagery(raw);
+    let imagery: ImageAsset[] = [];
+    try {
+      imagery = buildImagery(raw);
+    } catch {
+      imagery = [];
+    }
+    const ui = section(
+      () => analyzeUi(raw, colors.roles),
+      { primaryButton: null, secondaryButton: null, link: null, radius: [], spacing: [], shadows: [] },
+      (u) => narrateUi(u, imagery.length),
+    );
     emit({ type: "partial", key: "ui", value: ui });
     emit({ type: "partial", key: "imagery", value: imagery });
-    done(narrateUi(ui, imagery.length));
 
     begin("voice", "Reading voice & tone");
-    const voice = analyzeVoice({
-      title: raw.title,
-      description: raw.description,
-      h1: raw.h1,
-      headings: raw.headings,
-      ctas: raw.ctaLabels,
-      paragraphs: raw.paragraphs,
-    });
+    const voice = section(
+      () =>
+        analyzeVoice({
+          title: raw.title,
+          description: raw.description,
+          h1: raw.h1,
+          headings: raw.headings,
+          ctas: raw.ctaLabels,
+          paragraphs: raw.paragraphs,
+        }),
+      {
+        title: raw.title,
+        description: raw.description,
+        headline: raw.h1[0] ?? raw.title,
+        headings: [],
+        ctas: [],
+        keywords: [],
+        traits: [],
+        stats: { avgHeadlineWords: 0, caseStyle: "mixed", exclamationRate: 0, youRate: 0 },
+      },
+      narrateVoice,
+    );
     emit({ type: "partial", key: "voice", value: voice });
-    done(narrateVoice(voice));
 
     /* 8. done ----------------------------------------------------- */
     begin("finalize", "Assembling brand guideline");

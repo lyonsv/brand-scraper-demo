@@ -1,11 +1,9 @@
-// Minimal font proxy so extracted web fonts can be previewed even when the origin
-// does not send CORS headers. Only font files from public hosts are relayed.
-import { assertPublicUrl } from "@/lib/url";
-
+// Minimal font proxy so extracted web fonts can be previewed even when the origin does not send
+// CORS headers. Only public hosts (checked at connect time) and only real font files are relayed.
+import { fetchPublic, sniffFont } from "@/lib/scan/egress";
 
 const MAX_BYTES = 3 * 1024 * 1024;
-const FONT_EXT = /\.(woff2?|ttf|otf)(\?|#|$)/i;
-const TYPES: Record<string, string> = { woff2: "font/woff2", woff: "font/woff", ttf: "font/ttf", otf: "font/otf" };
+const TYPES = { woff2: "font/woff2", woff: "font/woff", ttf: "font/ttf", otf: "font/otf" } as const;
 
 export async function GET(req: Request): Promise<Response> {
   const target = new URL(req.url).searchParams.get("url") ?? "";
@@ -15,26 +13,23 @@ export async function GET(req: Request): Promise<Response> {
   } catch {
     return new Response("bad url", { status: 400 });
   }
-  if (!FONT_EXT.test(url.pathname) && !url.hostname.endsWith("fonts.gstatic.com")) {
-    return new Response("not a font", { status: 400 });
-  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return new Response("bad url", { status: 400 });
+  let result;
   try {
-    await assertPublicUrl(url);
-  } catch {
-    return new Response("blocked", { status: 403 });
+    result = await fetchPublic(url, { signal: req.signal, maxBytes: MAX_BYTES, timeoutMs: 8000 });
+  } catch (e) {
+    const blocked = e instanceof Error && /not public|non-public/.test(e.message);
+    return new Response(blocked ? "blocked" : "upstream failed", { status: blocked ? 403 : 502 });
   }
-  const upstream = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(8000) }).catch(() => null);
-  if (!upstream || !upstream.ok || !upstream.body) return new Response("upstream failed", { status: 502 });
-  const len = Number(upstream.headers.get("content-length") ?? 0);
-  if (len > MAX_BYTES) return new Response("too large", { status: 413 });
-  const buf = await upstream.arrayBuffer();
-  if (buf.byteLength > MAX_BYTES) return new Response("too large", { status: 413 });
-  const ext = url.pathname.match(/\.(woff2?|ttf|otf)/i)?.[1]?.toLowerCase() ?? "woff2";
-  return new Response(buf, {
+  if (result.status !== 200) return new Response("upstream failed", { status: 502 });
+  const kind = sniffFont(result.body);
+  if (!kind) return new Response("not a font", { status: 415 });
+  return new Response(new Uint8Array(result.body), {
     headers: {
-      "Content-Type": TYPES[ext] ?? "application/octet-stream",
+      "Content-Type": TYPES[kind],
       "Cache-Control": "public, max-age=86400",
       "Access-Control-Allow-Origin": "*",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }

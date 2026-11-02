@@ -23,11 +23,11 @@ export function narrateColors(p: ColorPalette, viewports: number): string {
   let s = `Sampled ${plural(p.samplePoints, "point")} across ${plural(viewports, "viewport")} — `;
   s += chromatic.length
     ? `${plural(chromatic.length, "chromatic cluster")} stand${chromatic.length === 1 ? "s" : ""} out`
-    : "the palette is essentially monochrome";
+    : "the palette is mostly neutral";
   if (primary) {
     s += /call-to-action/.test(primary.reason)
       ? `; ${primary.hex} dominates CTA backgrounds`
-      : `; picked ${primary.hex} as primary (${primary.reason.charAt(0).toLowerCase()}${primary.reason.slice(1)})`;
+      : `; picked ${primary.hex} as primary (${/^[A-Z][a-z]/.test(primary.reason) ? primary.reason.charAt(0).toLowerCase() + primary.reason.slice(1) : primary.reason})`;
   }
   if (bg) s += `, on a ${bg.oklch.l > 0.6 ? "light" : "dark"} ${bg.hex} canvas`;
   return `${s}.`;

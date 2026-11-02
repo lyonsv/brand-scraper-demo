@@ -83,6 +83,69 @@
   }
 
   /* -------------------------------------------------------------- */
+  /* Text helpers that ignore aria-hidden / visually hidden copies     */
+  /* -------------------------------------------------------------- */
+  var SR_CLASS = /(^|[\s_-])(sr-only|visually-?hidden|screen-?reader(-text)?|a11y-hidden|assistive-text|offscreen)($|[\s_-])/i;
+  function isSrOnly(el) {
+    var cls = typeof el.className === "string" ? el.className : el.getAttribute("class") || "";
+    if (SR_CLASS.test(cls)) return true;
+    var cs = getComputedStyle(el);
+    if (cs.clipPath === "inset(50%)" || /^rect\(0(px)?,? 0(px)?/.test(cs.clip || "")) return true;
+    if (cs.position === "absolute" || cs.position === "fixed") {
+      var r = el.getBoundingClientRect();
+      if (r.width <= 2 && r.height <= 2) return true;
+      if (r.right < 0 || r.bottom < -window.scrollY - 1000 || r.left > window.innerWidth + 100) return true;
+    }
+    return false;
+  }
+  function collapseRepeat(s) {
+    if (s.length >= 4) {
+      if (s.length % 2 === 1) {
+        var mid = (s.length - 1) / 2;
+        if (s.charAt(mid) === " " && s.slice(0, mid) === s.slice(mid + 1)) return s.slice(0, mid);
+      } else if (s.slice(0, s.length / 2) === s.slice(s.length / 2)) {
+        return s.slice(0, s.length / 2);
+      }
+    }
+    return s;
+  }
+  /** innerText with some descendants temporarily removed from layout. */
+  function textWithout(el, shouldHide) {
+    var hidden = [];
+    var kids = el.querySelectorAll("*");
+    for (var k = 0; k < kids.length && k < 400; k++) {
+      var kid = kids[k];
+      if (shouldHide(kid)) hidden.push([kid, kid.style.getPropertyValue("display"), kid.style.getPropertyPriority("display")]);
+    }
+    for (var h = 0; h < hidden.length; h++) hidden[h][0].style.setProperty("display", "none", "important");
+    var out = txt(el.innerText);
+    for (var h2 = 0; h2 < hidden.length; h2++) {
+      if (hidden[h2][1]) hidden[h2][0].style.setProperty("display", hidden[h2][1], hidden[h2][2]);
+      else hidden[h2][0].style.removeProperty("display");
+    }
+    return out;
+  }
+  /**
+   * Visible text without aria-hidden / sr-only duplicates, with "X X" repeats collapsed. When the
+   * visible copy is aria-hidden (animated headlines), fall back to the screen-reader copy.
+   */
+  function cleanText(el) {
+    if (!el.querySelector("*")) return collapseRepeat(txt(el.innerText));
+    var visible = textWithout(el, function (n) {
+      return n.getAttribute("aria-hidden") === "true" || isSrOnly(n);
+    });
+    if (visible) return collapseRepeat(visible);
+    return collapseRepeat(
+      textWithout(el, function (n) {
+        return n.getAttribute("aria-hidden") === "true";
+      }),
+    );
+  }
+  function hiddenFromUsers(el) {
+    return isSrOnly(el) || closestTag(el, "[aria-hidden=true]");
+  }
+
+  /* -------------------------------------------------------------- */
   /* Walk visible elements once                                       */
   /* -------------------------------------------------------------- */
   var all = document.body ? document.body.getElementsByTagName("*") : [];
@@ -118,8 +181,8 @@
       if (isHeading) add(headingFamilies, cs.fontFamily, w);
     }
 
-    if (TYPE_TAGS[el.tagName]) {
-      var t = txt(el.textContent);
+    if (TYPE_TAGS[el.tagName] && !hiddenFromUsers(el)) {
+      var t = cleanText(el);
       if (t.length > 1) {
         var key = el.tagName + "|" + fontSize + "|" + cs.fontWeight + "|" + cs.fontFamily;
         var b = typeBuckets[key];
@@ -166,6 +229,17 @@
   /* CTA buttons & links                                              */
   /* -------------------------------------------------------------- */
   var CTA_WORDS = /(get started|start|sign ?up|try|contact|book|demo|buy|join|download|free|subscribe|shop|learn more|explore|apply|create|request|deploy|order|register)/i;
+  var NON_CTA = /^(accept( all)?( cookies)?|reject( all)?|decline|allow( all)?( cookies)?|cookie (settings|preferences)|manage (cookies|preferences)|close|menu|search|open menu|main navigation menu|toggle navigation|previous|next|play|pause)$/i;
+  var LANG = /^(english|español|espanol|deutsch|français|francais|italiano|português|portugues|nederlands|日本語|한국어|中文|简体中文|繁體中文|русский|language|languages)\b|\((us|uk|gb|ca|au|in)\)$|^[a-z]{2}(-[a-z]{2})?$/i;
+  var CONSENT = /(cookie|consent|gdpr|onetrust|didomi|usercentrics|truste|osano|cmp|privacy-banner|ccpa)/i;
+  function inConsent(el) {
+    var p = el;
+    for (var d = 0; p && d < 10; d++, p = p.parentElement) {
+      var c = (typeof p.className === "string" ? p.className : "") + " " + (p.id || "") + " " + (p.getAttribute("aria-label") || "");
+      if (CONSENT.test(c)) return true;
+    }
+    return false;
+  }
   var buttons = [];
   var seenBtn = {};
   var btnEls = document.querySelectorAll(
@@ -177,8 +251,15 @@
     if (!isVisible(be, bcs)) continue;
     var br = be.getBoundingClientRect();
     if (br.width < 40 || br.width > 520 || br.height < 24 || br.height > 96) continue;
-    var label = txt(be.innerText || be.value || be.getAttribute("aria-label"));
+    if (be.hasAttribute("aria-haspopup") || be.hasAttribute("aria-expanded") || be.hasAttribute("aria-controls")) continue;
+    if (hiddenFromUsers(be)) continue;
+    if (closestTag(be, "[role=dialog], [aria-modal=true], [role=alertdialog]")) continue;
+    if (inConsent(be)) continue;
+    var label = cleanText(be) || txt(be.value || be.getAttribute("aria-label"));
     if (label.length < 2 || label.length > 40) continue;
+    var hrefAttr = be.getAttribute("href") || "";
+    if (/^(skip|jump) to|main content|^skip$/i.test(label) || (hrefAttr.charAt(0) === "#" && /skip|main|content/i.test(hrefAttr + " " + label))) continue;
+    if (NON_CTA.test(label) || LANG.test(label) || /lang|locale|language|country|region/i.test(attrBlob(be))) continue;
     var bgA = alphaOf(bcs.backgroundColor);
     var bBw = px(bcs.borderTopWidth);
     var ghost = bgA < 0.5 && bBw > 0 && alphaOf(bcs.borderTopColor) > 0.3;
@@ -453,7 +534,7 @@
     var im = imgs[mi];
     if (logoNodes.indexOf(im) > -1) continue;
     var ir = im.getBoundingClientRect();
-    if (ir.width < 220 || ir.height < 140) continue;
+    if (ir.width < 150 || ir.height < 110 || ir.width * ir.height < 24000) continue;
     if (closestTag(im, "header, nav")) continue;
     var isrc = abs(im.currentSrc || im.src);
     if (!isrc || /^data:/.test(isrc) || seenImg[isrc]) continue;
@@ -474,8 +555,8 @@
     var els = document.querySelectorAll(sel);
     for (var q = 0; q < els.length && out.length < max; q++) {
       var e = els[q];
-      if (!isVisible(e)) continue;
-      var tx = txt(e.innerText);
+      if (!isVisible(e) || hiddenFromUsers(e)) continue;
+      var tx = cleanText(e);
       if (tx.length >= minLen && tx.length <= maxLen && out.indexOf(tx) === -1) out.push(tx);
     }
     return out;

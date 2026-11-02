@@ -80,7 +80,7 @@ export function BrowserFrame({ state }: { state: ScanState }) {
     /* keep raw */
   }
   return (
-    <div className="overflow-hidden rounded-2xl border border-line bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.12)]">
+    <div className="self-start overflow-hidden rounded-2xl border border-line bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.12)]">
       <div className="flex items-center gap-3 border-b border-line bg-[#fafaf8] px-4 py-2.5">
         <div className="flex gap-1.5" aria-hidden>
           <span className="h-2.5 w-2.5 rounded-full bg-[#e5e4df]" />

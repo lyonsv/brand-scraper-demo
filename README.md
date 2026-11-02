@@ -48,9 +48,18 @@ tests/*.test.ts
 
 **Pipeline:** validate URL → launch/reuse browser (fresh 1440×900 context, `bypassCSP`, service workers blocked, media and ~40 analytics hosts aborted) → navigate (`domcontentloaded`, then `networkidle` raced against 5s, bot-challenge detection) → dismiss cookie banners → scroll up to 12 steps, grid-sampling backgrounds and taking screenshots → extract → analyse (colours, typography, logo, UI, voice; each step emits a `partial`) → `done`.
 
-**SSRF:** the URL is DNS-resolved and rejected if any address is non-public. Every request the page makes goes through `context.route` with a cached per-host check. Chromium follows redirects without re-entering the route handler, so for the main document the handler walks the redirect chain itself (`maxRedirects: 0`) and checks every hop before the browser follows it. The redirect chain is checked again after navigation.
+**SSRF:** the URL is DNS-resolved up front and rejected if any address is non-public. All Chromium traffic is then forced through a small local forward proxy (`scan/egress.ts`). The proxy resolves each destination itself, refuses private, loopback, link-local and metadata addresses, and connects to the address it just checked. That one check covers redirects, subresources, websockets and DNS rebinding. On top of that, `context.route` aborts iframes, media and known trackers. For the main document it also walks the redirect chain itself, so a redirect to a private address comes back as a clean `blocked_url` error. The font proxy uses the same connect-time lookup and checks font magic bytes.
 
-**Colour roles:** primary is the first chromatic CTA background, then a `--brand/--primary/--accent` CSS variable, then a neutral CTA that stands out from the page (monochrome brands such as Vercel), then the most-used chromatic cluster. Secondary and accent are the next chromatic clusters at least 30° of hue away. Background, surface, text, muted and border come from the sampled neutrals, or are derived (and flagged `derived`) when the page lacks them.
+**Colour roles:** primary is chosen in this order:
+
+1. The strongest chromatic CTA background. CTAs are grouped by colour and weighted by rank. A CTA is never chosen if its colour matches the page background or the body text.
+2. A `--brand/--primary/--accent` CSS variable.
+3. A neutral CTA that is neither the background nor the text colour.
+4. The most prominent vivid colour on the page. Colours that are also defined as CSS variables count triple.
+5. A monochrome CTA that matches the text colour.
+6. The darkest text colour.
+
+Secondary and accent are the next chromatic clusters at least 30° of hue away. Background, surface, text, muted and border come from the sampled neutrals, or are derived (and flagged `derived`) when the page lacks them. Every analysis section is isolated: if one fails, it emits a `warn` step and an empty value instead of ending the scan.
 
 ## Limitations
 
@@ -59,6 +68,7 @@ tests/*.test.ts
 - Primary-colour picking is heuristic. Monochrome sites (Linear, Vercel) get a neutral primary, which is accurate for those sites but less exciting. Gradient or canvas-heavy heroes are not sampled as colours.
 - Logo detection scores header/nav images and SVGs. Logos drawn with CSS backgrounds or `<canvas>` are only caught by the PNG fallback, and only when a candidate exists. "Reversed" tiles invert single-tone SVGs with a CSS filter.
 - Web fonts are previewed through `/api/font`. Fonts that load only through JS (Typekit kits, for example) or that sit in CSS we couldn't read fall back to the site's font stack. Font licences belong to their owners.
-- The SSRF checks don't pin DNS between the check and the connection, so a DNS-rebinding race is still possible in theory. Subresource redirects (images, scripts) are checked after the fact rather than hop by hop. This is fine for a local demo but not hardened for multi-tenant hosting.
+- The egress proxy is per process and listens on 127.0.0.1 without authentication. Another local process could use it, but it only reaches public addresses. It's not hardened for multi-tenant hosting.
+- Primary-colour heuristics are tuned on a handful of sites. Vercel now gets its design-system blue (`--ds-blue-700`) rather than black, and Linear gets `--color-indigo`.
 - Voice analysis is surface-level: word counts, casing, punctuation, "you" frequency and keyword counts. It doesn't read for meaning.
 - Only one Chromium per process, with at most 2 concurrent scans. There is no persistence or caching of results.

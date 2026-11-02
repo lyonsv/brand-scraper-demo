@@ -1,5 +1,5 @@
 import type { ColorCluster, ColorRole, ColorRoleName, ContrastPair, Oklch } from "../types";
-import { adjustLightness, deltaE, findCluster, hueDistance, isNeutral, parseColor } from "./color";
+import { CLUSTER_DELTA_E as CLUSTER_DE, adjustLightness, deltaE, findCluster, hueDistance, isNeutral, parseColor } from "./color";
 import { contrast, contrastRatio, pickTextColor } from "./contrast";
 
 export interface WeightedHex {
@@ -55,13 +55,31 @@ export function toWeightedHex(map: Record<string, number>): WeightedHex[] {
 }
 
 export function pickPrimary(input: RoleInput): ColorRole | null {
-  // 1. a chromatic CTA background among the top-scored buttons
-  for (const cta of input.ctas.slice(0, 6)) {
+  // the dominant background, plus the runner-up when it's a neutral (not a brand-coloured band)
+  const pageBgs = input.backgrounds
+    .slice(0, 2)
+    .filter((b, i) => i === 0 || isNeutral(parseColor(b.hex)?.oklch ?? { l: 0, c: 1, h: 0 }))
+    .map((b) => b.hex);
+  const textHex = input.texts[0]?.hex;
+  const clashes = (hex: string) => pageBgs.some((bg) => deltaE(bg, hex) < 10);
+
+  // 1. the strongest chromatic CTA colour: CTAs are grouped by colour and weighted by rank,
+  //    so a colour used on several prominent buttons beats a one-off. Never the page
+  //    background or body-text colour.
+  const groups: Array<{ hex: string; oklch: Oklch; weight: number; label: string }> = [];
+  input.ctas.slice(0, 12).forEach((cta, i) => {
     const p = parseColor(cta.bg);
-    if (p && !isNeutral(p.oklch) && p.alpha >= 0.5) {
-      const cluster = findCluster(input.clusters, p.hex);
-      return makeRole("primary", cluster?.hex ?? p.hex, cluster?.oklch ?? p.oklch, `Background of the "${cta.label}" call-to-action`);
-    }
+    if (!p || p.alpha < 0.5 || isNeutral(p.oklch) || clashes(p.hex)) return;
+    if (textHex && deltaE(textHex, p.hex) < 10) return;
+    const w = 1 / (1 + i * 0.35);
+    const g = groups.find((x) => deltaE(x.hex, p.hex) < CLUSTER_DE);
+    if (g) g.weight += w;
+    else groups.push({ hex: p.hex, oklch: p.oklch, weight: w, label: cta.label });
+  });
+  if (groups.length) {
+    const best = groups.sort((a, b) => b.weight - a.weight)[0];
+    const cluster = findCluster(input.clusters, best.hex);
+    return makeRole("primary", cluster?.hex ?? best.hex, cluster?.oklch ?? best.oklch, `Background of the "${best.label}" call-to-action`);
   }
   // 2. a brand-named CSS custom property
   const vars = Object.entries(input.cssVars)
@@ -74,16 +92,41 @@ export function pickPrimary(input: RoleInput): ColorRole | null {
     const v = vars[0];
     return makeRole("primary", v.parsed!.hex, v.parsed!.oklch, `CSS variable ${v.name}`);
   }
-  // 3. a neutral CTA that stands out from the page (monochrome brands such as black buttons)
-  const pageBg = input.backgrounds[0]?.hex;
+  // 3. a neutral CTA that is neither the page background nor the body-text colour
+  const isText = (hex: string) => !!textHex && deltaE(textHex, hex) < 10;
   for (const cta of input.ctas.slice(0, 4)) {
     const p = parseColor(cta.bg);
-    if (p && p.alpha >= 0.5 && (!pageBg || deltaE(pageBg, p.hex) > 10)) {
+    if (p && p.alpha >= 0.5 && !clashes(p.hex) && !isText(p.hex)) {
       return makeRole("primary", p.hex, p.oklch, `Background of the "${cta.label}" call-to-action (monochrome brand)`);
     }
   }
-  // 4. the most-used chromatic colour
-  const chroma = input.clusters.find((c) => c.chromatic && c.share >= 0.004);
+  // 4. the most prominent vivid colour on the page. Colours the stylesheet also defines as CSS
+  //    variables (design-system colours) count triple, so a defined brand hue beats a stray
+  //    illustration colour of similar usage.
+  const onPage = (c: ColorCluster) => (c.sources.background ?? 0) + (c.sources.text ?? 0) + (c.sources.border ?? 0) + (c.sources.cta ?? 0);
+  const vividScore = (c: ColorCluster) => c.share * ((c.sources.variable ?? 0) > 0 ? 3 : 1);
+  const vivid = input.clusters
+    .filter((c) => c.oklch.c >= 0.08 && onPage(c) > 0 && !clashes(c.hex))
+    .map((c) => ({ c, score: vividScore(c) }))
+    .filter((x) => x.score >= 0.002)
+    .sort((a, b) => b.score - a.score)[0]?.c;
+  if (vivid) {
+    const varName = (vivid.sources.variable ?? 0) > 0
+      ? Object.entries(input.cssVars).find(([, v]) => {
+          const p = parseColor(v);
+          return p && vivid.members.includes(p.hex);
+        })?.[0]
+      : undefined;
+    return makeRole("primary", vivid.hex, vivid.oklch, varName ? `CSS variable ${varName}, also used on the page` : "Most prominent vivid colour on the page");
+  }
+  // 4b. a monochrome brand whose CTA is simply the text colour (black-on-white or white-on-black)
+  for (const cta of input.ctas.slice(0, 4)) {
+    const p = parseColor(cta.bg);
+    if (p && p.alpha >= 0.5 && !clashes(p.hex)) {
+      return makeRole("primary", p.hex, p.oklch, `Background of the "${cta.label}" call-to-action (monochrome brand, same as text)`);
+    }
+  }
+  const chroma = input.clusters.find((c) => c.chromatic && c.share >= 0.004 && !clashes(c.hex));
   if (chroma) return makeRole("primary", chroma.hex, chroma.oklch, "Most-used chromatic colour on the page");
   // 5. the darkest text colour
   const dark = [...input.texts].sort((a, b) => (parseColor(a.hex)?.oklch.l ?? 1) - (parseColor(b.hex)?.oklch.l ?? 1))[0];

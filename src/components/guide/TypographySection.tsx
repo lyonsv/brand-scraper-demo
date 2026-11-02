@@ -1,6 +1,6 @@
 "use client";
 
-import { familyStack, fontFaceCss, previewWeights } from "@/lib/fonts";
+import { familyStack, fontFaceCss, formatWeight, previewWeights } from "@/lib/fonts";
 import type { Typography } from "@/lib/types";
 import { Chip } from "./primitives";
 
@@ -42,7 +42,7 @@ export default function TypographySection({ typography }: { typography: Typograp
               {f.weights.length ? (
                 <div className="mt-4 flex flex-wrap gap-1.5">
                   {f.weights.map((w) => (
-                    <Chip key={w}>{w}</Chip>
+                    <Chip key={w}>{formatWeight(w)}</Chip>
                   ))}
                 </div>
               ) : null}

@@ -93,6 +93,8 @@ export interface RawButton {
   width: number;
   top: number;
   inHeader: boolean;
+  /** label reads like a call to action ("Get started", "Sign up", …) */
+  cta?: boolean;
   score: number;
 }
 

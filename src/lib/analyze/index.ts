@@ -51,7 +51,7 @@ export function variableColors(vars: Record<string, string>): WeightMap {
   return map;
 }
 
-export function analyzeColors(raw: RawExtraction, samplePoints: number): ColorPalette {
+export function analyzeColors(raw: RawExtraction, samplePoints: number, pixels: BrandMarkPixels = {}): ColorPalette {
   const entries = [
     ...normalise(raw.bgColors, "background"),
     ...normalise(raw.textColors, "text"),
@@ -67,6 +67,7 @@ export function analyzeColors(raw: RawExtraction, samplePoints: number): ColorPa
     backgrounds: toWeightedHex(raw.bgColors),
     texts: toWeightedHex(raw.textColors),
     borders: toWeightedHex(raw.borderColors),
+    marks: brandMarkColors(raw, pixels),
   });
   return {
     roles,
@@ -148,7 +149,17 @@ export function analyzeUi(raw: RawExtraction, roles: ColorRole[]): UiElements {
     });
   }
   primary = primary ?? filled[0] ?? raw.buttons[0];
-  const secondary = raw.buttons.find((b) => {
+  const distinct = (b: RawButton) => {
+    if (!primary || b === primary) return false;
+    if (b.bg === "transparent") return true;
+    const a = parseColor(b.bg);
+    const p = parseColor(primary.bg);
+    return !!a && !!p && deltaE(a.hex, p.hex) >= 10;
+  };
+  // prefer a real call to action for the secondary button, then any distinct button
+  const differentLabel = (b: RawButton) => !primary || b.text.trim().toLowerCase() !== primary.text.trim().toLowerCase();
+  const secondary = raw.buttons.find((b) => b.cta && distinct(b) && differentLabel(b)) ?? raw.buttons.find((b) => {
+    if (!differentLabel(b)) return false;
     if (!primary || b === primary) return false;
     if (b.bg === "transparent") return true;
     const a = parseColor(b.bg);
@@ -173,25 +184,113 @@ export function analyzeUi(raw: RawExtraction, roles: ColorRole[]): UiElements {
   };
 }
 
+/** Paint colours (fill/stroke/stop-color) used in an SVG, with occurrence counts. */
+export function svgPaintColors(svg: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const m of svg.matchAll(/(?:fill|stroke|stop-color)\s*[=:]\s*"?([^";)]+\)?)/gi)) {
+    const v = m[1].trim();
+    if (/^(none|transparent|url|inherit|currentcolor)/i.test(v)) continue;
+    const p = parseColor(v);
+    if (p) out[p.hex] = (out[p.hex] ?? 0) + 1;
+  }
+  return out;
+}
+
 /** Classify an SVG's paint colours: all dark neutrals, all light neutrals, or coloured. */
 export function svgTone(svg: string): "dark" | "light" | "color" {
-  const paints = [...svg.matchAll(/(?:fill|stroke|stop-color)\s*[=:]\s*"?([^";)]+\)?)/gi)].map((m) => m[1].trim());
-  const parsed = paints
-    .filter((v) => !/^(none|transparent|url|inherit)/i.test(v))
-    .map((v) => parseColor(v))
-    .filter((c): c is NonNullable<ReturnType<typeof parseColor>> => !!c);
-  if (!parsed.length) return "dark"; // SVG default fill is black
-  if (parsed.every((c) => c.oklch.l < 0.5 && c.oklch.c < 0.12)) return "dark";
-  if (parsed.every((c) => c.oklch.l > 0.85 && c.oklch.c < 0.05)) return "light";
+  const paints = svgPaintColors(svg);
+  if (!Object.keys(paints).length) return "dark"; // SVG default fill is black
+  return toneOf(paints);
+}
+
+/**
+ * Pixel maps may carry a "__bg__<colour>" marker (the opaque corner colour of a captured element).
+ * Drop that colour so a logo's white header background doesn't decide its tone.
+ */
+export function withoutBackground(input: Record<string, number>): Record<string, number> {
+  const marker = Object.keys(input).find((k) => k.startsWith("__bg__"));
+  const out: Record<string, number> = {};
+  const bg = marker ? parseColor(marker.slice(6)) : null;
+  for (const [k, v] of Object.entries(input)) {
+    if (k.startsWith("__bg__")) continue;
+    // with a known background, keep only "ink": pixels clearly lighter/darker than it
+    // (drops the background and the anti-aliased fringe around thin strokes)
+    if (bg) {
+      const p = parseColor(k);
+      if (!p || Math.abs(p.oklch.l - bg.oklch.l) < 0.3) continue;
+    }
+    out[k] = v;
+  }
+  return out;
+}
+
+/** Tone of a weighted colour set (SVG paints or sampled pixels). */
+/**
+ * Tone of a captured raster logo. Without a clean edge colour (e.g. a translucent sticky header),
+ * a single colour covering ≥35% of the capture is treated as the backdrop, not the mark.
+ */
+export function rasterTone(input: Record<string, number>): "dark" | "light" | "color" {
+  if (Object.keys(input).some((k) => k.startsWith("__bg__"))) return toneOf(input);
+  const entries = Object.entries(input);
+  const total = entries.reduce((sum, [, w]) => sum + w, 0);
+  const [topKey, topW] = [...entries].sort((a, b) => b[1] - a[1])[0] ?? ["", 0];
+  if (total && topW / total >= 0.35 && topW / total <= 0.9) return toneOf({ ...input, [`__bg__${topKey}`]: 0 });
+  return toneOf(input);
+}
+
+export function toneOf(input: Record<string, number>): "dark" | "light" | "color" {
+  const marked = input;
+  const colors = withoutBackground(marked);
+  // weighted mean lightness of the mark, plus how much of it is vivid colour
+  let total = 0;
+  let sumL = 0;
+  let vivid = 0;
+  for (const [c, w] of Object.entries(colors)) {
+    const p = parseColor(c);
+    if (!p) continue;
+    total += w;
+    sumL += p.oklch.l * w;
+    if (p.oklch.c >= 0.12) vivid += w;
+  }
+  if (!total || vivid / total > 0.3) return "color";
+  const meanL = sumL / total;
+  if (meanL < 0.5) return "dark";
+  if (meanL > 0.78) return "light";
   return "color";
+}
+
+/** Most-weighted clearly chromatic colour in a weighted set, or null. */
+export function dominantChromatic(input: Record<string, number>): string | null {
+  const colors = withoutBackground(input);
+  const clusters = clusterColors(Object.entries(colors).map(([color, weight]) => ({ color, weight, source: "background" as const })));
+  return clusters.find((c) => c.oklch.c >= 0.06 && c.share >= 0.08)?.hex ?? null;
+}
+
+export interface BrandMarkPixels {
+  /** sampled opaque pixels of the captured logo PNG */
+  logo?: Record<string, number> | null;
+  /** sampled opaque pixels of the best site icon */
+  icon?: Record<string, number> | null;
+}
+
+export function brandMarkColors(raw: RawExtraction, px: BrandMarkPixels): Array<{ hex: string; source: "logo" | "icon" }> {
+  const marks: Array<{ hex: string; source: "logo" | "icon" }> = [];
+  const top = raw.logos?.[0];
+  const logoColors = top?.kind === "svg" && top.svg ? svgPaintColors(top.svg) : px.logo ?? null;
+  const fromLogo = logoColors ? dominantChromatic(logoColors) : null;
+  if (fromLogo) marks.push({ hex: fromLogo, source: "logo" });
+  const fromIcon = px.icon ? dominantChromatic(px.icon) : null;
+  if (fromIcon) marks.push({ hex: fromIcon, source: "icon" });
+  return marks;
 }
 
 export function svgToDataUrl(svg: string): string {
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 
-export function buildLogoSet(raw: RawExtraction, pngFallback: string | null, manifestIcons: IconAsset[]): LogoSet {
-  const assets: LogoAsset[] = raw.logos.map((l) => ({
+export function buildLogoSet(raw: RawExtraction, pngFallback: string | null, manifestIcons: IconAsset[], pngPixels: Record<string, number> | null = null): LogoSet {
+  const logoTone = pngPixels && Object.keys(pngPixels).length ? rasterTone(pngPixels) : undefined;
+  const assets: LogoAsset[] = raw.logos.map((l, i) => ({
     kind: l.kind,
     src: l.kind === "svg" && l.svg ? svgToDataUrl(l.svg) : (l.src ?? ""),
     svg: l.svg,
@@ -200,7 +299,7 @@ export function buildLogoSet(raw: RawExtraction, pngFallback: string | null, man
     height: l.height,
     score: l.score,
     reasons: l.reasons,
-    tone: l.kind === "svg" && l.svg ? svgTone(l.svg) : undefined,
+    tone: l.kind === "svg" && l.svg ? svgTone(l.svg) : i === 0 ? logoTone : undefined,
   }));
   const valid = assets.filter((a) => a.src);
   if (pngFallback && valid[0]) {
@@ -212,6 +311,7 @@ export function buildLogoSet(raw: RawExtraction, pngFallback: string | null, man
       height: valid[0].height,
       score: valid[0].score,
       reasons: ["element screenshot of the top candidate"],
+      tone: logoTone,
     });
   }
   const icons: IconAsset[] = [...raw.icons, ...manifestIcons];
@@ -219,7 +319,8 @@ export function buildLogoSet(raw: RawExtraction, pngFallback: string | null, man
   const seen = new Set<string>();
   return {
     primary: valid[0] ?? null,
-    alternates: valid.slice(1),
+    // weaker candidates near the top are usually customer-logo walls, not alternate marks
+    alternates: valid.slice(1).filter((a) => a.kind === "png" || a.score >= 6),
     icons: icons.filter((i) => (seen.has(i.href) ? false : (seen.add(i.href), true))).slice(0, 10),
   };
 }

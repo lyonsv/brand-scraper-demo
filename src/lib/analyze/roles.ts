@@ -15,6 +15,8 @@ export interface RoleInput {
   backgrounds: WeightedHex[];
   texts: WeightedHex[];
   borders: WeightedHex[];
+  /** colours from the brand mark (logo SVG fills, site icon pixels), best first */
+  marks?: Array<{ hex: string; source: "logo" | "icon" }>;
 }
 
 export interface RoleResult {
@@ -61,7 +63,8 @@ export function pickPrimary(input: RoleInput): ColorRole | null {
     .filter((b, i) => i === 0 || isNeutral(parseColor(b.hex)?.oklch ?? { l: 0, c: 1, h: 0 }))
     .map((b) => b.hex);
   const textHex = input.texts[0]?.hex;
-  const clashes = (hex: string) => pageBgs.some((bg) => deltaE(bg, hex) < 10);
+  // A primary must stand apart from the canvas: not the same colour, and at least 1.5:1 contrast.
+  const clashes = (hex: string) => pageBgs.some((bg) => deltaE(bg, hex) < 10) || (!!pageBgs[0] && contrastRatio(hex, pageBgs[0]) < 1.5);
 
   // 1. the strongest chromatic CTA colour: CTAs are grouped by colour and weighted by rank,
   //    so a colour used on several prominent buttons beats a one-off. Never the page
@@ -69,7 +72,10 @@ export function pickPrimary(input: RoleInput): ColorRole | null {
   const groups: Array<{ hex: string; oklch: Oklch; weight: number; label: string }> = [];
   input.ctas.slice(0, 12).forEach((cta, i) => {
     const p = parseColor(cta.bg);
-    if (!p || p.alpha < 0.5 || isNeutral(p.oklch) || clashes(p.hex)) return;
+    // A filled chromatic button is visible through its hue even when its luminance contrast
+    // with the canvas is low (yellow on white), so it only has to be clearly distinct (ΔE ≥ 15).
+    if (!p || p.alpha < 0.5 || isNeutral(p.oklch)) return;
+    if (clashes(p.hex) && pageBgs.some((bg) => deltaE(bg, p.hex) < 15)) return;
     if (textHex && deltaE(textHex, p.hex) < 10) return;
     const w = 1 / (1 + i * 0.35);
     const g = groups.find((x) => deltaE(x.hex, p.hex) < CLUSTER_DE);
@@ -85,7 +91,7 @@ export function pickPrimary(input: RoleInput): ColorRole | null {
   const vars = Object.entries(input.cssVars)
     .filter(([name]) => BRAND_VAR.test(name) && !NOT_BRAND_VAR.test(name))
     .map(([name, value]) => ({ name, parsed: parseColor(value) }))
-    .filter((v) => v.parsed && !isNeutral(v.parsed.oklch) && v.parsed.alpha > 0.9);
+    .filter((v) => v.parsed && !isNeutral(v.parsed.oklch) && v.parsed.alpha > 0.9 && !clashes(v.parsed.hex));
   if (vars.length) {
     // prefer the most "base" looking name (shortest), e.g. --brand over --brand-light-200
     vars.sort((a, b) => a.name.length - b.name.length);
@@ -119,6 +125,13 @@ export function pickPrimary(input: RoleInput): ColorRole | null {
       : undefined;
     return makeRole("primary", vivid.hex, vivid.oklch, varName ? `CSS variable ${varName}, also used on the page` : "Most prominent vivid colour on the page");
   }
+  // 4a. the brand mark itself: dominant chromatic colour of the logo SVG, then of the site icon
+  for (const mark of input.marks ?? []) {
+    const p = parseColor(mark.hex);
+    if (p && !isNeutral(p.oklch) && !clashes(p.hex)) {
+      return makeRole("primary", p.hex, p.oklch, mark.source === "logo" ? "Dominant colour of the logo" : "Dominant colour of the site icon");
+    }
+  }
   // 4b. a monochrome brand whose CTA is simply the text colour (black-on-white or white-on-black)
   for (const cta of input.ctas.slice(0, 4)) {
     const p = parseColor(cta.bg);
@@ -128,9 +141,10 @@ export function pickPrimary(input: RoleInput): ColorRole | null {
   }
   const chroma = input.clusters.find((c) => c.chromatic && c.share >= 0.004 && !clashes(c.hex));
   if (chroma) return makeRole("primary", chroma.hex, chroma.oklch, "Most-used chromatic colour on the page");
-  // 5. the darkest text colour
-  const dark = [...input.texts].sort((a, b) => (parseColor(a.hex)?.oklch.l ?? 1) - (parseColor(b.hex)?.oklch.l ?? 1))[0];
-  if (dark) return fromHex("primary", dark.hex, "No brand colour found; using the darkest text colour", true);
+  // 5. the most readable text colour (never one that disappears into the background)
+  const bg0 = pageBgs[0] ?? "#FFFFFF";
+  const readable = [...input.texts].sort((a, b) => contrastRatio(b.hex, bg0) - contrastRatio(a.hex, bg0))[0];
+  if (readable) return fromHex("primary", readable.hex, "No brand colour found; using the main text colour", true);
   return null;
 }
 
@@ -197,7 +211,9 @@ export function assignRoles(input: RoleInput): RoleResult {
   const muted = input.texts.find((t) => {
     if (t.hex === textHex) return false;
     const p = parseColor(t.hex);
-    if (!p || p.oklch.c > 0.08) return false;
+    // muted is a neutral: low chroma and never a colour that already holds a brand role
+    if (!p || p.oklch.c >= 0.06) return false;
+    if (roles.some((x) => (x.role === "primary" || x.role === "secondary" || x.role === "accent") && deltaE(x.hex, t.hex) < 6)) return false;
     const r = contrastRatio(t.hex, bgHex);
     return r >= 2.5 && r < textRatio && deltaE(t.hex, textHex) >= 5;
   });

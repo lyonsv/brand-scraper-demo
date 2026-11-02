@@ -52,12 +52,15 @@ tests/*.test.ts
 
 **Colour roles:** primary is chosen in this order:
 
-1. The strongest chromatic CTA background. CTAs are grouped by colour and weighted by rank. A CTA is never chosen if its colour matches the page background or the body text.
+1. The strongest chromatic CTA background. CTAs are grouped by colour and weighted by rank. A filled, vivid button only has to be clearly distinct in hue (ΔE ≥ 15), so yellow on white counts.
 2. A `--brand/--primary/--accent` CSS variable.
 3. A neutral CTA that is neither the background nor the text colour.
-4. The most prominent vivid colour on the page. Colours that are also defined as CSS variables count triple.
-5. A monochrome CTA that matches the text colour.
-6. The darkest text colour.
+4. The most prominent vivid page colour. Colours also defined as CSS variables count triple.
+5. The brand mark: the dominant chromatic colour of the logo (SVG fills, or the pixels of the logo image), then of the site icon. Icon pixels are sampled on a canvas from a data: URL fetched through the egress proxy.
+6. A monochrome CTA that matches the text colour.
+7. The most readable text colour.
+
+Every candidate except vivid filled CTAs must have at least 1.5:1 contrast against the background. Muted always comes from the neutrals, never from a brand-role colour. The demo never uses primary directly as text: a `primaryText` token keeps the hue but shifts OKLCH lightness until it reaches 3:1 against the background (badges are checked against their own tinted background).
 
 Secondary and accent are the next chromatic clusters at least 30° of hue away. Background, surface, text, muted and border come from the sampled neutrals, or are derived (and flagged `derived`) when the page lacks them. Every analysis section is isolated: if one fails, it emits a `warn` step and an empty value instead of ending the scan.
 
@@ -66,6 +69,7 @@ Secondary and accent are the next chromatic clusters at least 30° of hue away. 
 - One page only (the homepage after redirects). There is no crawling, so brand colours that only appear deeper in the site are missed.
 - Sites behind Cloudflare, PerimeterX and similar challenges return `bot_protected`. We don't try to evade them.
 - Primary-colour picking is heuristic. Monochrome sites (Linear, Vercel) get a neutral primary, which is accurate for those sites but less exciting. Gradient or canvas-heavy heroes are not sampled as colours.
+- Logo tiles reverse single-tone logos with a flat CSS filter, so detail inside the mark (Mailchimp's Freddie) becomes a solid shape on the dark tile. Header captures sometimes come out blank while sticky headers animate; those are dropped, so the PNG download can be missing.
 - Logo detection scores header/nav images and SVGs. Logos drawn with CSS backgrounds or `<canvas>` are only caught by the PNG fallback, and only when a candidate exists. "Reversed" tiles invert single-tone SVGs with a CSS filter.
 - Web fonts are previewed through `/api/font`. Fonts that load only through JS (Typekit kits, for example) or that sit in CSS we couldn't read fall back to the site's font stack. Font licences belong to their owners.
 - The egress proxy is per process and listens on 127.0.0.1 without authentication. Another local process could use it, but it only reaches public addresses. It's not hardened for multi-tenant hosting.

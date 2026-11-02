@@ -77,7 +77,16 @@ export interface VoiceInput {
   paragraphs: string[];
 }
 
-export function analyzeVoice(input: VoiceInput): Voice {
+const NAVIGATIONAL = /^(home|search|menu|your library|library|browse|log ?in|sign ?in|account|profile|settings|cart|bag|help|support|more|back|close|skip to (main )?content|main navigation|navigation|footer|header)$/i;
+
+/** True for UI chrome labels ("Home", "Your Library") that say nothing about brand voice. */
+export function isNavigational(s: string): boolean {
+  return NAVIGATIONAL.test(s.trim());
+}
+
+export function analyzeVoice(raw: VoiceInput): Voice {
+  const keep = (list: string[]) => list.filter((x) => !isNavigational(x));
+  const input: VoiceInput = { ...raw, h1: keep(raw.h1), headings: keep(raw.headings), ctas: keep(raw.ctas) };
   const headlines = [...input.h1, ...input.headings].filter(Boolean);
   const avgHeadlineWords = headlines.length
     ? Math.round((headlines.reduce((s, h) => s + wordCount(h), 0) / headlines.length) * 10) / 10

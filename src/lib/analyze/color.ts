@@ -20,6 +20,7 @@ import {
   parse,
 } from "culori/fn";
 import type { ColorCluster, ColorSource, Oklch } from "../types";
+import { contrastRatio } from "./contrast";
 
 // Register the colour spaces Chrome can hand back from getComputedStyle.
 registerMode(modeRgb);
@@ -197,4 +198,28 @@ export function adjustLightness(hex: string, delta: number): string {
   const l = Math.max(0, Math.min(1, p.oklch.l + delta));
   const out = formatHex({ mode: "oklch", l, c: p.oklch.c, h: p.oklch.h });
   return (out ?? hex).toUpperCase();
+}
+
+/**
+ * A version of `color` that is readable as text/graphics on `bg` (≥ minRatio, WCAG 1.4.11 uses 3:1).
+ * Returns the colour itself when it already passes; otherwise moves its OKLCH lightness away
+ * from the background in small steps (keeping hue and chroma); otherwise the first fallback that passes.
+ */
+export function readableOn(color: string, bg: string, minRatio = 3, fallbacks: string[] = []): string {
+  const p = parseColor(color);
+  const b = parseColor(bg);
+  if (!p || !b) return fallbacks[0] ?? color;
+  if (contrastRatio(p.hex, b.hex) >= minRatio) return p.hex;
+  const dir = b.oklch.l > 0.5 ? -1 : 1;
+  for (let step = 1; step <= 25; step++) {
+    const l = p.oklch.l + dir * step * 0.03;
+    if (l < 0 || l > 1) break;
+    const hex = (formatHex({ mode: "oklch", l, c: p.oklch.c, h: p.oklch.h }) ?? "").toUpperCase();
+    if (hex && contrastRatio(hex, b.hex) >= minRatio) return hex;
+  }
+  for (const f of fallbacks) {
+    const fp = parseColor(f);
+    if (fp && contrastRatio(fp.hex, b.hex) >= minRatio) return fp.hex;
+  }
+  return contrastRatio("#FFFFFF", b.hex) >= contrastRatio("#000000", b.hex) ? "#FFFFFF" : "#000000";
 }

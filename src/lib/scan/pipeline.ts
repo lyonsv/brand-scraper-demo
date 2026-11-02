@@ -10,6 +10,7 @@ import {
   buildLogoSet,
   buildTypography,
   parseFontFaces,
+  withoutBackground,
 } from "../analyze";
 import type { ParsedFontFace } from "../analyze/typography";
 import { ScanError } from "../errors";
@@ -86,6 +87,92 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function mergeWeights(into: WeightMap, from: WeightMap) {
   for (const [k, v] of Object.entries(from)) into[k] = (into[k] ?? 0) + v;
 }
+
+/** Decode an image (data: URL) on a canvas inside the page and count its opaque pixels by colour. */
+const SAMPLE_PIXELS = `(function (src, markBg) {
+  return new Promise(function (resolve) {
+    var img = new Image();
+    var done = false;
+    var t = setTimeout(function () { if (!done) { done = true; resolve(null); } }, 3000);
+    img.onload = function () {
+      if (done) return;
+      done = true; clearTimeout(t);
+      try {
+        var w = 96, h = Math.max(1, Math.min(96, Math.round(96 * (img.naturalHeight || 96) / (img.naturalWidth || 96))));
+        var c = document.createElement("canvas"); c.width = w; c.height = h;
+        var ctx = c.getContext("2d"); ctx.drawImage(img, 0, 0, w, h);
+        var d = ctx.getImageData(0, 0, w, h).data, out = {};
+        // the dominant opaque colour along the edges is the background behind the mark
+        var edge = {}, edgeN = 0, corner = null, cornerN = 0;
+        for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
+          if (y !== 0 && y !== h - 1 && x !== 0 && x !== w - 1) continue;
+          var j = (y * w + x) * 4; edgeN++;
+          if (d[j + 3] < 200) continue;
+          var ek = "rgb(" + (d[j] & 0xf8) + ", " + (d[j + 1] & 0xf8) + ", " + (d[j + 2] & 0xf8) + ")";
+          edge[ek] = (edge[ek] || 0) + 1;
+          if (edge[ek] > cornerN) { corner = ek; cornerN = edge[ek]; }
+        }
+        if (cornerN < edgeN * 0.4) corner = null;
+        for (var i = 0; i < d.length; i += 4) {
+          if (d[i + 3] < 200) continue;
+          var k = "rgb(" + (d[i] & 0xf8) + ", " + (d[i + 1] & 0xf8) + ", " + (d[i + 2] & 0xf8) + ")";
+          out[k] = (out[k] || 0) + 1;
+        }
+        if (markBg && corner && out[corner]) out["__bg__" + corner] = 0;
+        resolve(out);
+      } catch (e) { resolve(null); }
+    };
+    img.onerror = function () { if (!done) { done = true; clearTimeout(t); resolve(null); } };
+    img.src = src;
+  });
+})`;
+
+/** markBg: treat the opaque corner colour as the element's background (logo captures, not icons). */
+async function samplePixels(page: Page, dataUrl: string | null, markBg = false): Promise<Record<string, number> | null> {
+  if (!dataUrl) return null;
+  const out = await page.evaluate(`${SAMPLE_PIXELS}(${JSON.stringify(dataUrl)}, ${markBg})`).catch(() => null);
+  return out && typeof out === "object" ? (out as Record<string, number>) : null;
+}
+
+/** Fetch the best site icon through the (egress-proxied) context and return it as a data: URL. */
+async function fetchIconDataUrl(context: BrowserContext, icons: IconAsset[], guard: (u: string) => Promise<boolean>): Promise<string | null> {
+  const size = (i: IconAsset) => parseInt(i.sizes ?? "", 10) || (/apple-touch/.test(i.rel) ? 180 : 32);
+  const ranked = icons.filter((i) => i.rel !== "og:image" && i.rel !== "mask-icon").sort((a, b) => size(b) - size(a));
+  for (const icon of ranked.slice(0, 3)) {
+    try {
+      if (icon.href.startsWith("data:image/")) return icon.href;
+      if (!(await guard(icon.href))) continue;
+      const res = await context.request.get(icon.href, { timeout: 4000, maxRedirects: 3 });
+      const type = (res.headers()["content-type"] ?? "").split(";")[0].trim();
+      if (!res.ok() || !/^image\//.test(type)) continue;
+      const body = await res.body();
+      if (body.length > 600_000) continue;
+      return `data:${type};base64,${body.toString("base64")}`;
+    } catch {
+      /* try the next icon */
+    }
+  }
+  return null;
+}
+
+/** Mark the element that really scrolls (if not the window) and return its scroll height. */
+const FIND_SCROLLER = `(function(){
+  var winH = Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);
+  var best = null, bestH = 0;
+  if (winH > window.innerHeight + 50) return winH;
+  var els = document.querySelectorAll("body, body *");
+  for (var i = 0; i < els.length && i < 4000; i++) {
+    var el = els[i];
+    if (el.scrollHeight <= el.clientHeight + 50) continue;
+    var oy = getComputedStyle(el).overflowY;
+    if (oy !== "auto" && oy !== "scroll" && oy !== "overlay") continue;
+    var r = el.getBoundingClientRect();
+    if (r.width < window.innerWidth * 0.5 || r.height < window.innerHeight * 0.5) continue;
+    if (el.scrollHeight > bestH) { best = el; bestH = el.scrollHeight; }
+  }
+  if (best) { best.setAttribute("data-bs-scroller", "1"); return bestH; }
+  return winH;
+})()`;
 
 const CHALLENGE_TITLE = /(just a moment|attention required|access denied|verify you are human|are you a robot|security check|pardon our interruption|ddos-guard|one more step)/i;
 
@@ -286,14 +373,18 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
     mergeWeights(bgColors, first.colors);
     samplePoints += first.points;
     viewports++;
-    const docHeight = Number(await page.evaluate("Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)")) || 900;
+    // Some sites scroll an inner wrapper (body or a full-height div) instead of the window.
+    const docHeight = Number(await page.evaluate(FIND_SCROLLER)) || 900;
+    const scrollTo = (y: number) =>
+      page.evaluate(`(function(y){var el=document.querySelector("[data-bs-scroller]"); if (el) el.scrollTop=y; else window.scrollTo(0,y);})(${y})`);
+    const scrollHeight = async () => Number(await page.evaluate(`(function(){var el=document.querySelector("[data-bs-scroller]"); return el ? el.scrollHeight : Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0);})()`)) || docHeight;
     const stepPx = Math.round(900 * 0.85);
     const steps = Math.min(12, Math.max(1, Math.ceil((docHeight - 900) / stepPx)));
     const shotAt = new Set([Math.round(steps * 0.25), Math.round(steps * 0.5), Math.round(steps * 0.75), steps].filter((n) => n >= 1));
     let shots = 1;
     for (let i = 1; i <= steps; i++) {
       check();
-      await page.evaluate(`window.scrollTo(0, ${i * stepPx})`);
+      await scrollTo(i * stepPx);
       await sleep(250);
       const s = await sample().catch(() => null);
       if (s) {
@@ -307,12 +398,12 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
         shots++;
       }
     }
-    await page.evaluate("window.scrollTo(0, 0)");
+    await scrollTo(0);
     await sleep(350);
     // finish on the hero again so the panel ends on the recognisable view, not the footer
     emit({ type: "shot", label: "Back to top", data: await shot(page) });
     shots++;
-    const newHeight = Number(await page.evaluate("document.documentElement.scrollHeight")) || docHeight;
+    const newHeight = await scrollHeight();
     const covered = Math.min(newHeight, steps * stepPx + 900);
     const coverPct = Math.round((covered / Math.max(newHeight, 1)) * 100);
     done(
@@ -333,16 +424,39 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
     const extraVars = [inlineCss, ...sheets.map((s) => s.text)].reduce<Record<string, string>>((acc, css) => Object.assign(acc, parseRootVars(css)), {});
     for (const [k, v] of Object.entries(extraVars)) if (!(k in raw.cssVars)) raw.cssVars[k] = v;
 
+    // PNG capture of the top logo candidate. Sticky headers can still be animating back in after
+    // the scroll, giving a blank capture, so retry once and drop captures with no visible mark.
     let pngLogo: string | null = null;
+    let logoPixels: Record<string, number> | null = null;
     if (raw.logos.length) {
-      const buf = await page
-        .locator("[data-bs-logo]")
-        .first()
-        .screenshot({ type: "png", omitBackground: true, timeout: 3000 })
-        .catch(() => null);
-      if (buf) pngLogo = `data:image/png;base64,${buf.toString("base64")}`;
+      for (let attempt = 0; attempt < 2 && !pngLogo; attempt++) {
+        if (attempt) await sleep(800);
+        const buf = await page
+          .locator("[data-bs-logo]")
+          .first()
+          .screenshot({ type: "png", omitBackground: true, timeout: 3000, animations: "disabled" })
+          .catch(() => null);
+        if (!buf) continue;
+        const dataUrl = `data:image/png;base64,${buf.toString("base64")}`;
+        const px = await samplePixels(page, dataUrl, true);
+        if (px && Object.keys(withoutBackground(px)).length > 0) {
+          pngLogo = dataUrl;
+          logoPixels = px;
+        }
+      }
+    }
+    // For <img> logos, the image file itself is the best source for its tone (transparent pixels
+    // are skipped), and it is exactly what the guideline tiles display.
+    const topLogo = raw.logos[0];
+    if (topLogo?.kind === "img" && topLogo.src) {
+      const imgData = await fetchIconDataUrl(context, [{ rel: "logo", href: topLogo.src, sizes: "999" }], guard);
+      const px = await samplePixels(page, imgData, false);
+      // "__bg__none": transparent file, nothing to strip as backdrop
+      if (px && Object.keys(px).length) logoPixels = { ...px, __bg__none: 0 };
     }
     const manifestIcons = raw.manifestUrl ? await fetchManifestIcons(context, raw.manifestUrl, guard) : [];
+    // brand-mark pixels: logo capture (raster logos, tile tone) and the site icon (colour fallback)
+    const iconPixels = await samplePixels(page, await fetchIconDataUrl(context, [...raw.icons, ...manifestIcons], guard));
     done(
       `Walked ${fmt(raw.textElementCount)} text elements: ${plural(Object.keys(raw.textColors).length, "text colour")}, ${plural(raw.buttons.length, "button")}, ${plural(Object.keys(raw.cssVars).length, "CSS variable")}, ${plural(raw.fontFaces.length, "loaded font face")}, ${plural(raw.logos.length, "logo candidate")} and ${plural(raw.images.length, "large image")}.`,
     );
@@ -367,7 +481,7 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
 
     begin("colors", "Clustering colours");
     const colors = section(
-      () => analyzeColors(raw, samplePoints),
+      () => analyzeColors(raw, samplePoints, { logo: logoPixels, icon: iconPixels }),
       { roles: [], all: [], pairs: [], samplePoints },
       (c) => narrateColors(c, viewports),
     );
@@ -391,7 +505,7 @@ export async function runScan(rawUrl: string, emit: Emit, signal: AbortSignal): 
 
     begin("logo", "Scoring logo candidates");
     const logo = section(
-      () => buildLogoSet(raw, pngLogo, manifestIcons),
+      () => buildLogoSet(raw, pngLogo, manifestIcons, logoPixels),
       { primary: null, alternates: [], icons: [] },
       (l) => narrateLogo(l, raw.logos.length),
       (l) => !!l.primary || l.icons.length > 0,

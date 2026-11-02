@@ -83,6 +83,10 @@ function createProxy(): http.Server {
       res.end();
     });
     upstream.on("timeout", () => upstream.destroy());
+    // client went away (navigation, aborted fetch): stop the upstream request too
+    res.on("close", () => {
+      if (!res.writableFinished) upstream.destroy();
+    });
     req.pipe(upstream);
   });
 

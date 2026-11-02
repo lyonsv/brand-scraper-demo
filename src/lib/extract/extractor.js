@@ -229,7 +229,7 @@
   /* CTA buttons & links                                              */
   /* -------------------------------------------------------------- */
   var CTA_WORDS = /(get started|start|sign ?up|try|contact|book|demo|buy|join|download|free|subscribe|shop|learn more|explore|apply|create|request|deploy|order|register)/i;
-  var NON_CTA = /^(accept( all)?( cookies)?|reject( all)?|decline|allow( all)?( cookies)?|cookie (settings|preferences)|manage (cookies|preferences)|close|menu|search|open menu|main navigation menu|toggle navigation|previous|next|play|pause)$/i;
+  var NON_CTA = /^(accept( all)?( cookies)?|reject( all)?|decline|allow( all)?( cookies)?|cookie (settings|preferences)|manage (cookies|preferences)|close|menu|search|open menu|main navigation menu|toggle navigation|previous|next|play|pause|home|search|your library|library|browse|back|forward)$/i;
   var LANG = /^(english|español|espanol|deutsch|français|francais|italiano|português|portugues|nederlands|日本語|한국어|中文|简体中文|繁體中文|русский|language|languages)\b|\((us|uk|gb|ca|au|in)\)$|^[a-z]{2}(-[a-z]{2})?$/i;
   var CONSENT = /(cookie|consent|gdpr|onetrust|didomi|usercentrics|truste|osano|cmp|privacy-banner|ccpa)/i;
   function inConsent(el) {
@@ -240,6 +240,7 @@
     }
     return false;
   }
+  var SOCIAL = /(facebook|twitter|x\.com\/|instagram|linkedin|youtube|tiktok|pinterest|threads\.net|discord\.(gg|com)|github\.com|reddit\.com|mastodon|bsky\.app|wa\.me|whatsapp)/i;
   var buttons = [];
   var seenBtn = {};
   var btnEls = document.querySelectorAll(
@@ -260,6 +261,12 @@
     var hrefAttr = be.getAttribute("href") || "";
     if (/^(skip|jump) to|main content|^skip$/i.test(label) || (hrefAttr.charAt(0) === "#" && /skip|main|content/i.test(hrefAttr + " " + label))) continue;
     if (NON_CTA.test(label) || LANG.test(label) || /lang|locale|language|country|region/i.test(attrBlob(be))) continue;
+    // tabs, chips and badges are not buttons: too small or too tight
+    if (px(bcs.fontSize) < 13) continue;
+    if (px(bcs.paddingTop) < 6 && br.height < 36) continue;
+    if (SOCIAL.test(hrefAttr)) continue;
+    var inNav = closestTag(be, "nav, [role=navigation], [role=tablist], [role=tab]");
+    if (inNav && !CTA_WORDS.test(label)) continue;
     var bgA = alphaOf(bcs.backgroundColor);
     var bBw = px(bcs.borderTopWidth);
     var ghost = bgA < 0.5 && bBw > 0 && alphaOf(bcs.borderTopColor) > 0.3;
@@ -296,6 +303,7 @@
       width: Math.round(br.width),
       top: Math.round(top),
       inHeader: inHeader,
+      cta: CTA_WORDS.test(label),
       score: score,
     });
   }
